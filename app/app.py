@@ -89,7 +89,9 @@ def _personas_filtros_sql(args) -> tuple[str, dict]:
     if search:
         where.append("(p.nombre_apellido ILIKE :s OR p.dni ILIKE :s OR p.matricula ILIKE :s)")
         params["s"] = f"%{search}%"
-    if jur:
+    if jur == "__none__":
+        where.append("p.jurisdiccion IS NULL")
+    elif jur:
         where.append("p.jurisdiccion = :jur")
         params["jur"] = jur
     if dni_r == "si":
@@ -912,7 +914,13 @@ def planillas_list():
     # Obtenemos todas las fotos tipo planilla_aval con conteo y jurisdicciones
     where_jur = ""
     params: dict = {}
-    if jur_filter:
+    if jur_filter == "__none__":
+        where_jur = """AND EXISTS (
+            SELECT 1 FROM avales_2026.fotos_personas fp2
+            JOIN avales_2026.personas p2 ON p2.id = fp2.persona_id
+            WHERE fp2.foto_id = f.id AND p2.jurisdiccion IS NULL
+        )"""
+    elif jur_filter:
         where_jur = """AND EXISTS (
             SELECT 1 FROM avales_2026.fotos_personas fp2
             JOIN avales_2026.personas p2 ON p2.id = fp2.persona_id

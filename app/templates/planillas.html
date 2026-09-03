@@ -21,6 +21,7 @@
   <div class="col-md-4">
     <select class="form-select form-select-sm" name="jur">
       <option value="">Todas las jurisdicciones</option>
+      <option value="__none__" {% if f_jur == '__none__' %}selected{% endif %}>(sin jurisdicción)</option>
       {% for j in jurisdicciones %}
         <option value="{{ j }}" {% if j == f_jur %}selected{% endif %}>{{ j }}</option>
       {% endfor %}
