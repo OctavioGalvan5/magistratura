@@ -31,6 +31,22 @@
     <option value="auto" {% if f_origen=='auto' %}selected{% endif %}>Auto-creadas</option>
   </select></div>
   <div class="col-md-1 d-grid"><button class="btn btn-primary">Filtrar</button></div>
+
+  <div class="col-md-2"><select class="form-select form-select-sm" name="has_planilla">
+    <option value="">Planilla: indif.</option>
+    <option value="si" {% if f_has_planilla=='si' %}selected{% endif %}>Tiene planilla</option>
+    <option value="no" {% if f_has_planilla=='no' %}selected{% endif %}>Sin planilla</option>
+  </select></div>
+  <div class="col-md-2"><select class="form-select form-select-sm" name="has_dni">
+    <option value="">DNI adjunto: indif.</option>
+    <option value="si" {% if f_has_dni=='si' %}selected{% endif %}>Tiene DNI</option>
+    <option value="no" {% if f_has_dni=='no' %}selected{% endif %}>Sin DNI adjunto</option>
+  </select></div>
+  <div class="col-md-2"><select class="form-select form-select-sm" name="has_otro">
+    <option value="">Otros: indif.</option>
+    <option value="si" {% if f_has_otro=='si' %}selected{% endif %}>Tiene otros</option>
+    <option value="no" {% if f_has_otro=='no' %}selected{% endif %}>Sin otros</option>
+  </select></div>
 </form>
 
 <div class="d-flex justify-content-between align-items-center mb-2">
@@ -38,7 +54,9 @@
   <div>
     <a class="btn btn-sm btn-primary" href="{{ url_for('persona_nueva') }}">+ Nueva persona</a>
     <a class="btn btn-sm btn-outline-success"
-       href="{{ url_for('personas_excel', q=f_search, jur=f_jur, dni_recibido=f_dni_r, con_foto=f_con_foto, origen=f_origen) }}">
+       href="{{ url_for('personas_excel', q=f_search, jur=f_jur, dni_recibido=f_dni_r,
+                        con_foto=f_con_foto, origen=f_origen,
+                        has_planilla=f_has_planilla, has_dni=f_has_dni, has_otro=f_has_otro) }}">
       Descargar Excel
     </a>
   </div>

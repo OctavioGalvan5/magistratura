@@ -77,6 +77,10 @@ def _personas_filtros_sql(args) -> tuple[str, dict]:
     dni_r  = args.get("dni_recibido", "")
     con_foto = args.get("con_foto", "")
     origen = args.get("origen", "")
+    # Filtros por tipo de foto vinculada — tri-state cada uno: "si" / "no" / ""
+    has_planilla = args.get("has_planilla", "")
+    has_dni      = args.get("has_dni", "")
+    has_otro     = args.get("has_otro", "")
 
     where = []
     params: dict = {}
@@ -98,6 +102,25 @@ def _personas_filtros_sql(args) -> tuple[str, dict]:
         where.append("p.observaciones ILIKE 'Creada auto%'")
     elif origen == "excel":
         where.append("(p.observaciones IS NULL OR p.observaciones NOT ILIKE 'Creada auto%')")
+
+    # Filtros por tipo de foto vinculada. Cada uno es tri-state independiente.
+    # 'otro' incluye tanto tipo='otro' como filas con tipo NULL (fotos sin analizar).
+    tipo_clauses = {
+        "planilla": ("has_planilla", "f.tipo = 'planilla_aval'"),
+        "dni":      ("has_dni",      "f.tipo = 'dni'"),
+        "otro":     ("has_otro",     "(f.tipo = 'otro' OR f.tipo IS NULL)"),
+    }
+    for _key, (var_name, cond) in tipo_clauses.items():
+        val = locals()[var_name]
+        if val == "si":
+            where.append(f"""EXISTS (SELECT 1 FROM {SCHEMA}.fotos_personas fp
+                                     JOIN {SCHEMA}.fotos f ON f.id = fp.foto_id
+                                     WHERE fp.persona_id = p.id AND {cond})""")
+        elif val == "no":
+            where.append(f"""NOT EXISTS (SELECT 1 FROM {SCHEMA}.fotos_personas fp
+                                         JOIN {SCHEMA}.fotos f ON f.id = fp.foto_id
+                                         WHERE fp.persona_id = p.id AND {cond})""")
+
     return (("WHERE " + " AND ".join(where)) if where else ""), params
 
 
@@ -108,6 +131,9 @@ def personas_list():
     dni_r  = request.args.get("dni_recibido", "")
     con_foto = request.args.get("con_foto", "")
     origen = request.args.get("origen", "")
+    f_has_planilla = request.args.get("has_planilla", "")
+    f_has_dni      = request.args.get("has_dni", "")
+    f_has_otro     = request.args.get("has_otro", "")
 
     where_sql, params = _personas_filtros_sql(request.args)
 
@@ -140,6 +166,7 @@ def personas_list():
     return render_template("personas.html",
         personas=personas, jurisdicciones=jurisdicciones, stats=stats,
         f_search=search, f_jur=jur, f_dni_r=dni_r, f_con_foto=con_foto, f_origen=origen,
+        f_has_planilla=f_has_planilla, f_has_dni=f_has_dni, f_has_otro=f_has_otro,
     )
 
 
