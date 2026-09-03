@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block content %}
+<h4>Subir fotos</h4>
+<p class="text-muted small">
+  Si <strong>Analizar automáticamente</strong> está tildado, se corre visión (Anthropic Opus 4.7, fallback OpenAI)
+  sobre cada foto y se extrae DNI + nombre. Si el DNI ya existe en la base, se vincula; si no, se crea una persona nueva.
+</p>
+<form method="post" enctype="multipart/form-data" class="card p-3">
+  <label class="form-label">Archivos (JPG, PNG, WEBP, HEIC, PDF)</label>
+  <input type="file" name="files" class="form-control mb-3" multiple accept=".jpg,.jpeg,.png,.webp,.heic,.pdf">
+  <div class="form-check mb-3">
+    <input class="form-check-input" type="checkbox" name="analizar" id="analizar" checked>
+    <label class="form-check-label" for="analizar">Analizar automáticamente y vincular / crear persona</label>
+  </div>
+  <button class="btn btn-primary">Subir</button>
+</form>
+{% endblock %}

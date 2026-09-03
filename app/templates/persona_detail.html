@@ -1,0 +1,140 @@
+{% extends "base.html" %}
+{% block title %}{{ p.nombre_apellido }}{% endblock %}
+{% block content %}
+
+<div class="d-flex justify-content-between align-items-start mb-3">
+  <div>
+    <h3 class="mb-0">{{ p.nombre_apellido }}</h3>
+    <div class="text-muted small">
+      #{{ p.numero_excel or '?' }} · Persona ID {{ p.id }}
+      {% if p.jurisdiccion %} · <span class="badge badge-jur">{{ p.jurisdiccion }}</span>{% endif %}
+    </div>
+  </div>
+  <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('personas_list') }}">← Volver al listado</a>
+</div>
+
+<div class="row g-3">
+
+<div class="col-lg-6">
+  <div class="card">
+    <div class="card-header"><strong>Datos de la persona</strong></div>
+    <div class="card-body">
+    <form method="post" action="{{ url_for('persona_edit', pid=p.id) }}">
+      <div class="row g-2">
+        <div class="col-12">
+          <label class="form-label small">Nombre y apellido</label>
+          <input class="form-control" name="nombre_apellido" value="{{ p.nombre_apellido or '' }}">
+        </div>
+        <div class="col-md-6">
+          <label class="form-label small">DNI</label>
+          <input class="form-control" name="dni" value="{{ p.dni or '' }}">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label small">Género</label>
+          <select class="form-select" name="genero">
+            <option value=""></option>
+            {% for g in ['M','F','X'] %}
+              <option value="{{ g }}" {% if p.genero==g %}selected{% endif %}>{{ g }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-3">
+          <label class="form-label small">DNI recibido</label>
+          <select class="form-select" name="dni_recibido">
+            <option value="">—</option>
+            <option value="si" {% if p.dni_recibido %}selected{% endif %}>Sí</option>
+            <option value="no" {% if p.dni_recibido == False %}selected{% endif %}>No</option>
+          </select>
+        </div>
+        <div class="col-md-6">
+          <label class="form-label small">Matrícula (texto original)</label>
+          <input class="form-control" name="matricula" value="{{ p.matricula or '' }}">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label small">Tomo</label>
+          <input class="form-control" name="tomo" value="{{ p.tomo or '' }}">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label small">Folio</label>
+          <input class="form-control" name="folio" value="{{ p.folio or '' }}">
+        </div>
+        <div class="col-12">
+          <label class="form-label small">Domicilio</label>
+          <input class="form-control" name="domicilio" value="{{ p.domicilio or '' }}">
+        </div>
+        <div class="col-md-6">
+          <label class="form-label small">Jurisdicción</label>
+          <input class="form-control" name="jurisdiccion" value="{{ p.jurisdiccion or '' }}">
+        </div>
+        <div class="col-md-6">
+          <label class="form-label small">Cotejado</label>
+          <input class="form-control" name="cotejado" value="{{ p.cotejado or '' }}" placeholder="OK / VERIFICAR / ...">
+        </div>
+        <div class="col-12">
+          <label class="form-label small">Observaciones</label>
+          <textarea class="form-control" name="observaciones" rows="2">{{ p.observaciones or '' }}</textarea>
+        </div>
+        <div class="col-12 text-end mt-2">
+          <button class="btn btn-primary">Guardar cambios</button>
+        </div>
+      </div>
+    </form>
+    </div>
+  </div>
+</div>
+
+<div class="col-lg-6">
+  <div class="card mb-3">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      <strong>Fotos vinculadas ({{ fotos|length }})</strong>
+    </div>
+    <div class="card-body">
+      {% if not fotos %}
+        <div class="text-muted">Sin fotos aún.</div>
+      {% endif %}
+      <div class="row g-2">
+      {% for f in fotos %}
+        <div class="col-md-6">
+          <div class="border rounded p-2">
+            {% if f.content_type and 'image' in f.content_type %}
+              <a href="{{ f.url }}" target="_blank"><img src="{{ f.url }}" class="img-fluid thumb w-100"></a>
+            {% else %}
+              <a href="{{ f.url }}" target="_blank">{{ f.filename_original }}</a>
+            {% endif %}
+            <div class="small text-muted mt-1">
+              {{ f.filename_original }}<br>
+              <span class="badge status-{{ f.match_status }}">{{ f.match_status }}</span>
+              {% if f.dni_detectado %} · DNI: {{ f.dni_detectado }}{% endif %}
+            </div>
+            <div class="d-flex gap-1 mt-1">
+              <form method="post" action="{{ url_for('foto_desvincular', fid=f.id, pid=p.id) }}">
+                <input type="hidden" name="next" value="{{ url_for('persona_detail', pid=p.id) }}">
+                <button class="btn btn-sm btn-outline-secondary">Desvincular</button>
+              </form>
+              <form method="post" action="{{ url_for('foto_eliminar', fid=f.id) }}"
+                    onsubmit="return confirm('¿Eliminar la foto completa (afecta a todas las personas vinculadas)?');">
+                <input type="hidden" name="next" value="{{ url_for('persona_detail', pid=p.id) }}">
+                <button class="btn btn-sm btn-outline-danger">Eliminar foto</button>
+              </form>
+            </div>
+          </div>
+        </div>
+      {% endfor %}
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header"><strong>Subir foto para esta persona</strong></div>
+    <div class="card-body">
+      <form method="post" action="{{ url_for('fotos_upload') }}" enctype="multipart/form-data">
+        <input type="hidden" name="persona_id" value="{{ p.id }}">
+        <input type="file" name="files" class="form-control mb-2" multiple accept=".jpg,.jpeg,.png,.webp,.heic,.pdf">
+        <button class="btn btn-primary">Subir</button>
+      </form>
+    </div>
+  </div>
+</div>
+
+</div>
+{% endblock %}

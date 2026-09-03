@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}{{ cfg.titulo }}{% endblock %}
+{% block content %}
+
+<div class="d-flex justify-content-between align-items-start mb-3">
+  <div>
+    <h4>{{ cfg.titulo }} <span class="badge bg-primary">{{ rows|length }}</span></h4>
+    <div class="text-muted small">{{ cfg.descripcion }}</div>
+  </div>
+  <div>
+    <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('reportes_index') }}">← Reportes</a>
+    <a class="btn btn-success btn-sm" href="{{ url_for('reporte_excel', slug=slug) }}">Descargar Excel</a>
+  </div>
+</div>
+
+{% if not rows %}
+  <div class="alert alert-success">Nada para reportar acá. 🎉</div>
+{% else %}
+<div class="table-responsive">
+<table class="table table-sm table-striped table-hover align-middle">
+  <thead>
+    <tr>
+      {% for col in rows[0].keys() %}<th>{{ col }}</th>{% endfor %}
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for r in rows %}
+    <tr>
+      {% for col, v in r.items() %}
+        <td>
+          {% if col == 'nombre_apellido' %}
+            <a href="{{ url_for('persona_detail', pid=r.id) }}">{{ v }}</a>
+          {% elif col == 'auto_creada' and v %}<span class="badge bg-info">auto</span>
+          {% elif col == 'auto_creada' %}<span class="text-muted small">excel</span>
+          {% elif col == 'jurisdiccion' %}<span class="badge badge-jur">{{ v or '—' }}</span>
+          {% else %}{{ v if v is not none else '' }}
+          {% endif %}
+        </td>
+      {% endfor %}
+      <td><a class="btn btn-sm btn-outline-primary" href="{{ url_for('persona_detail', pid=r.id) }}">Ver</a></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endif %}
+{% endblock %}

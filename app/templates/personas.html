@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="row g-2 mb-3">
+  <div class="col-sm-2"><div class="card p-2"><div class="text-muted small">Total</div><div class="h4 mb-0">{{ stats.total }}</div></div></div>
+  <div class="col-sm-2"><div class="card p-2"><div class="text-muted small">Auto-creadas</div><div class="h4 mb-0 text-info">{{ stats.auto_creadas }}</div></div></div>
+  <div class="col-sm-2"><div class="card p-2"><div class="text-muted small">Sin DNI</div><div class="h4 mb-0 text-danger">{{ stats.sin_dni }}</div></div></div>
+  <div class="col-sm-2"><div class="card p-2"><div class="text-muted small">DNI recibido</div><div class="h4 mb-0 text-success">{{ stats.dni_recibido }}</div></div></div>
+  <div class="col-sm-2"><div class="card p-2"><div class="text-muted small">Con foto</div><div class="h4 mb-0 text-primary">{{ stats.con_foto }}</div></div></div>
+</div>
+
+<form class="row g-2 mb-3" method="get">
+  <div class="col-md-3"><input class="form-control" name="q" placeholder="Buscar nombre / DNI / matrícula" value="{{ f_search }}"></div>
+  <div class="col-md-2"><select class="form-select" name="jur">
+    <option value="">Todas jurisdicciones</option>
+    {% for j in jurisdicciones %}<option value="{{ j }}" {% if j == f_jur %}selected{% endif %}>{{ j }}</option>{% endfor %}
+  </select></div>
+  <div class="col-md-2"><select class="form-select" name="dni_recibido">
+    <option value="">DNI recibido: todos</option>
+    <option value="si" {% if f_dni_r=='si' %}selected{% endif %}>Sí</option>
+    <option value="no" {% if f_dni_r=='no' %}selected{% endif %}>No</option>
+  </select></div>
+  <div class="col-md-2"><select class="form-select" name="con_foto">
+    <option value="">Con foto: todos</option>
+    <option value="si" {% if f_con_foto=='si' %}selected{% endif %}>Con foto</option>
+    <option value="no" {% if f_con_foto=='no' %}selected{% endif %}>Sin foto</option>
+  </select></div>
+  <div class="col-md-2"><select class="form-select" name="origen">
+    <option value="">Origen: todos</option>
+    <option value="excel" {% if f_origen=='excel' %}selected{% endif %}>Del Excel</option>
+    <option value="auto" {% if f_origen=='auto' %}selected{% endif %}>Auto-creadas</option>
+  </select></div>
+  <div class="col-md-1 d-grid"><button class="btn btn-primary">Filtrar</button></div>
+</form>
+
+<div class="d-flex justify-content-between align-items-center mb-2">
+  <div class="text-muted small">{{ personas|length }} resultados</div>
+  <a class="btn btn-sm btn-outline-success"
+     href="{{ url_for('personas_excel', q=f_search, jur=f_jur, dni_recibido=f_dni_r, con_foto=f_con_foto, origen=f_origen) }}">
+    Descargar Excel
+  </a>
+</div>
+
+<div class="table-responsive">
+<table class="table table-sm table-striped table-hover align-middle">
+  <thead>
+    <tr>
+      <th>#</th><th>Nombre</th><th>DNI</th><th>Matrícula</th><th>Jurisdicción</th>
+      <th>DNI recib.</th><th>Cotej.</th><th>Fotos</th><th>Origen</th><th></th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for p in personas %}
+    <tr>
+      <td class="text-muted small">{{ p.numero_excel or "" }}</td>
+      <td><a href="{{ url_for('persona_detail', pid=p.id) }}">{{ p.nombre_apellido }}</a>
+          {% if p.genero %}<span class="text-muted small">({{ p.genero }})</span>{% endif %}</td>
+      <td>{{ p.dni or "" }}</td>
+      <td>
+        {% if p.tomo and p.folio %}T° {{ p.tomo }} F° {{ p.folio }}
+        {% elif p.matricula %}<span class="text-muted small">{{ p.matricula }}</span>{% endif %}
+      </td>
+      <td><span class="badge badge-jur">{{ p.jurisdiccion or "—" }}</span></td>
+      <td>{% if p.dni_recibido %}<span class="badge bg-success">SI</span>{% else %}<span class="badge bg-secondary">NO</span>{% endif %}</td>
+      <td>{% if p.cotejado == "OK" %}<span class="badge bg-success">OK</span>{% elif p.cotejado %}<span class="badge bg-warning text-dark">{{ p.cotejado }}</span>{% else %}—{% endif %}</td>
+      <td>{% if p.n_fotos %}<span class="badge bg-primary">{{ p.n_fotos }}</span>{% else %}<span class="text-muted">0</span>{% endif %}</td>
+      <td>{% if p.auto_creada %}<span class="badge bg-info">auto</span>{% else %}<span class="text-muted small">excel</span>{% endif %}</td>
+      <td><a class="btn btn-sm btn-outline-primary" href="{{ url_for('persona_detail', pid=p.id) }}">Ver</a></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endblock %}

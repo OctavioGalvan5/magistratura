@@ -1,0 +1,38 @@
+# ── Secrets ────────────────────────────────
+.env
+.env.local
+.env.*.local
+
+# ── Python ─────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+
+# ── IDEs / herramientas locales ─────────────
+.vscode/
+.idea/
+.claude/
+*.swp
+.DS_Store
+Thumbs.db
+
+# ── Datos reales / privados ────────────────
+AVALES_ELECCION_2026_control.xlsx
+WhatsApp Chat - Avales CMF/
+backups/
+entregables_*.csv
+duplicados_*.csv
+
+# ── Salidas de scripts y tests ─────────────
+CamScanner*.jpg
+CamScanner*_p*.jpg
+CamScanner*.pdf
+*.tmp
+*.log

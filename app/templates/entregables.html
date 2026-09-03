@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}Entregables{% endblock %}
+{% block content %}
+
+<div class="d-flex justify-content-between align-items-start mb-3">
+  <div>
+    <h4>Entregables (PDFs por jurisdicción)</h4>
+    <div class="text-muted small">
+      PDFs generados y subidos a MinIO en <code>entregables/</code>.
+      Los links son presignados y válidos por 24 horas.
+    </div>
+  </div>
+</div>
+
+<div class="mb-3 d-flex gap-2 flex-wrap">
+  <a class="btn btn-sm {% if not variante_filter %}btn-dark{% else %}btn-outline-dark{% endif %}"
+     href="{{ url_for('entregables_list') }}">Todas <span class="badge bg-light text-dark">{{ total }}</span></a>
+  {% for v, n in conteos.items() %}
+    <a class="btn btn-sm {% if variante_filter == v %}btn-dark{% else %}btn-outline-dark{% endif %}"
+       href="{{ url_for('entregables_list', variante=v) }}">
+      {{ v }} <span class="badge bg-light text-dark">{{ n }}</span>
+    </a>
+  {% endfor %}
+</div>
+
+{% if variante_filter == 'entrega' or not variante_filter %}
+  <div class="alert alert-info small">
+    <strong>Variante <code>entrega</code></strong>: el formato listo para mandar a la Cámara Federal —
+    planillas firmadas seguidas de DNIs/otros de cada firmante, sin portadas ni separadores.
+    El archivo se llama <code>avales.&lt;jurisdicción&gt;.pdf</code> siguiendo el ejemplo del instructivo.
+  </div>
+{% endif %}
+
+{% if not grupos %}
+  <div class="alert alert-warning">
+    No hay PDFs en <code>entregables/</code>. Corré primero
+    <code>python generar_pdfs_jurisdiccion.py --tipo entrega</code>.
+  </div>
+{% endif %}
+
+{% for jur, items in grupos.items() %}
+  <div class="card mb-3">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      <strong>{{ jur }}</strong>
+      <span class="text-muted small">{{ items|length }} PDF{{ 's' if items|length != 1 else '' }}</span>
+    </div>
+    <div class="list-group list-group-flush">
+      {% for it in items %}
+        <div class="list-group-item d-flex justify-content-between align-items-center">
+          <div>
+            {% if it.variante == 'entrega' %}
+              <span class="badge bg-success">{{ it.variante }}</span>
+            {% elif it.variante == 'completo' %}
+              <span class="badge bg-primary">{{ it.variante }}</span>
+            {% elif it.variante == 'todos' %}
+              <span class="badge bg-secondary">{{ it.variante }}</span>
+            {% else %}
+              <span class="badge bg-info">{{ it.variante }}</span>
+            {% endif %}
+            {% if it.variante == 'entrega' %}
+              <code class="ms-2">avales.{{ it.jurisdiccion_slug }}.pdf</code>
+            {% else %}
+              <code class="ms-2">avales.{{ it.jurisdiccion_slug }}.{{ it.variante }}.pdf</code>
+            {% endif %}
+            <span class="text-muted small ms-2">{{ it.kb }} KB · {{ it.fecha }}</span>
+          </div>
+          <div class="d-flex gap-1">
+            <a class="btn btn-sm btn-outline-primary" href="{{ it.url }}" target="_blank">Ver</a>
+            <a class="btn btn-sm btn-outline-success" href="{{ it.url }}" download>Descargar</a>
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+  </div>
+{% endfor %}
+
+{% endblock %}

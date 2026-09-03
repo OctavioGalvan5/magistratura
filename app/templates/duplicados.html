@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block content %}
+<h4>Duplicados detectados durante la importación</h4>
+<p class="text-muted small">
+  Estas filas del Excel <strong>no se importaron</strong> porque su DNI ya estaba presente en otra fila.
+  Verificá cuál es el nombre correcto y editá la persona ya existente si hace falta.
+</p>
+
+{% if not filas %}
+  <div class="alert alert-info">No hay duplicados registrados.</div>
+{% else %}
+<div class="table-responsive">
+<table class="table table-striped">
+<thead>
+  <tr>
+    <th>#</th><th>Nombre (descartado)</th><th>DNI</th><th>Matrícula</th><th>Jurisdicción</th><th>Buscar en la base</th>
+  </tr>
+</thead>
+<tbody>
+{% for f in filas %}
+  <tr>
+    <td>{{ f.numero_excel }}</td>
+    <td>{{ f.nombre_apellido }}</td>
+    <td>{{ f.dni }}</td>
+    <td>{{ f.matricula or '' }}</td>
+    <td>{{ f.jurisdiccion or '' }}</td>
+    <td><a class="btn btn-sm btn-outline-primary"
+           href="{{ url_for('personas_list', q=f.dni) }}">Ver persona con este DNI</a></td>
+  </tr>
+{% endfor %}
+</tbody>
+</table>
+</div>
+{% endif %}
+{% endblock %}

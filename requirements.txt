@@ -1,0 +1,22 @@
+# ── Web ──────────────────────────────────
+Flask==3.1.0
+gunicorn==23.0.0
+python-dotenv==1.0.1
+
+# ── Database ─────────────────────────────
+SQLAlchemy==2.0.44
+psycopg2-binary==2.9.10
+
+# ── Storage ──────────────────────────────
+minio==7.2.20
+
+# ── LLM providers ────────────────────────
+anthropic==0.100.0
+openai==2.11.0
+
+# ── Media / archivos ─────────────────────
+Pillow==12.3.0
+pypdfium2==5.13.0
+fpdf2==2.8.6
+openpyxl==3.1.2
+pandas==2.3.0

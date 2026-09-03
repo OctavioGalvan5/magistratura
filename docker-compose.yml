@@ -1,0 +1,16 @@
+services:
+  app:
+    build: .
+    image: magistratura-avales:latest
+    container_name: magistratura-avales
+    restart: unless-stopped
+    ports:
+      - "5057:5057"
+    env_file:
+      - .env
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:5057/personas"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s

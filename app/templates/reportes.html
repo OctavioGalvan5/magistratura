@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block content %}
+<h4>Reportes</h4>
+<div class="row g-3 mt-2">
+{% for key, r in reportes.items() %}
+  <div class="col-md-4">
+    <div class="card h-100">
+      <div class="card-body">
+        <div class="d-flex justify-content-between align-items-start">
+          <h5 class="card-title">{{ r.titulo }}</h5>
+          <span class="badge bg-primary fs-5">{{ counts[key] }}</span>
+        </div>
+        <p class="text-muted small">{{ r.descripcion }}</p>
+        <a class="btn btn-primary btn-sm" href="{{ url_for('reporte_detalle', slug=key) }}">Ver</a>
+        <a class="btn btn-outline-success btn-sm" href="{{ url_for('reporte_excel', slug=key) }}">Excel</a>
+      </div>
+    </div>
+  </div>
+{% endfor %}
+</div>
+{% endblock %}

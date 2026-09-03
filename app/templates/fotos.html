@@ -1,0 +1,118 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="d-flex justify-content-between align-items-start mb-3">
+  <h4>Fotos</h4>
+  <div>
+    <a class="btn btn-outline-warning" href="{{ url_for('fotos_revisar') }}">Para revisar →</a>
+    <a class="btn btn-primary" href="{{ url_for('fotos_upload') }}">+ Subir fotos</a>
+  </div>
+</div>
+
+<div class="mb-2 small text-muted">Filtro por estado:</div>
+<div class="mb-3 d-flex gap-1 flex-wrap">
+  <a class="btn btn-sm {% if not f_status %}btn-dark{% else %}btn-outline-dark{% endif %}"
+     href="{{ url_for('fotos_list', tipo=f_tipo) }}">Todos</a>
+  {% for c in counts_status %}
+    <a class="btn btn-sm {% if f_status==c.match_status %}btn-dark{% else %}btn-outline-dark{% endif %}"
+       href="{{ url_for('fotos_list', status=c.match_status, tipo=f_tipo) }}">
+      {{ c.match_status }} <span class="badge bg-light text-dark">{{ c.n }}</span>
+    </a>
+  {% endfor %}
+</div>
+
+<div class="mb-2 small text-muted">Filtro por tipo detectado:</div>
+<div class="mb-3 d-flex gap-1 flex-wrap">
+  <a class="btn btn-sm {% if not f_tipo %}btn-secondary{% else %}btn-outline-secondary{% endif %}"
+     href="{{ url_for('fotos_list', status=f_status) }}">Todos</a>
+  {% for c in counts_tipo %}
+    <a class="btn btn-sm {% if f_tipo==c.tipo %}btn-secondary{% else %}btn-outline-secondary{% endif %}"
+       href="{{ url_for('fotos_list', tipo=c.tipo, status=f_status) }}">
+      {{ c.tipo }} <span class="badge bg-light text-dark">{{ c.n }}</span>
+    </a>
+  {% endfor %}
+</div>
+
+{% if not fotos %}<div class="text-muted">No hay fotos con ese filtro.</div>{% endif %}
+
+<div class="row g-3">
+{% for f in fotos %}
+  <div class="col-md-4 col-lg-3">
+    <div class="card h-100">
+      {% if f.content_type and 'image' in f.content_type %}
+        <a href="{{ f.url }}" target="_blank"><img src="{{ f.url }}" class="card-img-top thumb"></a>
+      {% else %}
+        <div class="p-3 text-center"><a href="{{ f.url }}" target="_blank">{{ f.filename_original }}</a></div>
+      {% endif %}
+      <div class="card-body p-2">
+        <div class="small text-muted text-truncate" title="{{ f.filename_original }}">{{ f.filename_original }}</div>
+        <div class="mt-1">
+          {% if f.tipo %}<span class="badge bg-secondary me-1">{{ f.tipo }}</span>{% endif %}
+          <span class="badge status-{{ f.match_status }}">{{ f.match_status }}</span>
+        </div>
+
+        {% if f.personas and f.personas|length %}
+        <div class="small mt-2">
+          <div class="text-muted">Personas ({{ f.personas|length }}):</div>
+          {% for pp in f.personas %}
+            <div>
+              <a href="{{ url_for('persona_detail', pid=pp.persona_id) }}">{{ pp.nombre or ('#' ~ pp.persona_id) }}</a>
+              <span class="text-muted small">{{ pp.dni or '' }}</span>
+              {% if pp.creada %}<span class="badge bg-info">nueva</span>{% endif %}
+            </div>
+          {% endfor %}
+        </div>
+        {% else %}
+          <form method="post" action="{{ url_for('foto_asignar', fid=f.id) }}" class="mt-2 foto-assign-form">
+            <input type="hidden" name="next" value="{{ request.full_path }}">
+            <input type="text" class="form-control form-control-sm persona-search" placeholder="Vincular a…" autocomplete="off">
+            <input type="hidden" name="persona_id" class="persona-id">
+            <div class="results list-group list-group-flush small" style="max-height:140px; overflow:auto;"></div>
+            <button class="btn btn-sm btn-primary mt-1" disabled>Vincular</button>
+          </form>
+        {% endif %}
+
+        <form method="post" action="{{ url_for('foto_eliminar', fid=f.id) }}" class="mt-2"
+              onsubmit="return confirm('¿Eliminar esta foto?');">
+          <input type="hidden" name="next" value="{{ request.full_path }}">
+          <button class="btn btn-sm btn-outline-danger">Eliminar foto</button>
+        </form>
+      </div>
+    </div>
+  </div>
+{% endfor %}
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.querySelectorAll('.foto-assign-form').forEach(form => {
+  const inp = form.querySelector('.persona-search');
+  const hid = form.querySelector('.persona-id');
+  const res = form.querySelector('.results');
+  const btn = form.querySelector('button[type=submit], button:not([type])');
+  let t;
+  inp.addEventListener('input', () => {
+    clearTimeout(t); hid.value = ''; btn.disabled = true;
+    const q = inp.value.trim();
+    if (q.length < 2) { res.innerHTML=''; return; }
+    t = setTimeout(async () => {
+      const r = await fetch('/api/personas/search?q=' + encodeURIComponent(q));
+      const data = await r.json();
+      res.innerHTML = data.map(p =>
+        `<a href="#" class="list-group-item list-group-item-action py-1" data-id="${p.id}">
+           <strong>${p.nombre_apellido}</strong>
+           <div class="text-muted small">DNI ${p.dni||'—'} · ${p.matricula||''} · ${p.jurisdiccion||''}</div>
+         </a>`).join('');
+      res.querySelectorAll('a').forEach(a => a.addEventListener('click', e => {
+        e.preventDefault();
+        hid.value = a.dataset.id;
+        inp.value = a.querySelector('strong').textContent;
+        res.innerHTML = ''; btn.disabled = false;
+      }));
+    }, 200);
+  });
+});
+</script>
+{% endblock %}

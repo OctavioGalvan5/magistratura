@@ -1,0 +1,35 @@
+.git/
+.gitignore
+.env
+.env.local
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+.vscode/
+.idea/
+
+# Datos reales / privados / temporales
+AVALES_ELECCION_2026_control.xlsx
+WhatsApp Chat - Avales CMF/
+backups/
+entregables_*.csv
+duplicados_*.csv
+CamScanner*.jpg
+CamScanner*_p*.jpg
+test_multi_dni.py
+analyze_excel.py
+preflight.py
+inventory.py
+inspect_jurisdicciones.py
+verify.py
+check_state.py
+backfill_source_sha.py
+setup_schema.py
+import_excel.py
+migrate_v2.py
+
+# Docs
+README.md

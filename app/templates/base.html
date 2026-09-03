@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}Avales Elección 2026{% endblock %}</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+<style>
+  body { padding-bottom: 3rem; }
+  .thumb { max-height: 140px; object-fit: cover; border-radius: .3rem; }
+  .thumb-lg { max-height: 400px; object-fit: contain; }
+  .status-pendiente  { background:#e9ecef; color:#495057; }
+  .status-matched    { background:#d1e7dd; color:#0f5132; }
+  .status-manual     { background:#cff4fc; color:#055160; }
+  .status-ambiguo    { background:#fff3cd; color:#664d03; }
+  .status-sin_match  { background:#f8d7da; color:#842029; }
+  .status-error      { background:#f5c2c7; color:#58151c; }
+  .badge-jur { background:#eef; color:#334; font-weight:500; }
+  .table td, .table th { vertical-align: middle; }
+  .stat-card .num { font-size:2rem; font-weight:600; }
+</style>
+</head>
+<body>
+<nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+  <div class="container-fluid">
+    <a class="navbar-brand" href="{{ url_for('personas_list') }}">Avales Elección 2026</a>
+    <div class="collapse navbar-collapse">
+      <ul class="navbar-nav">
+        <li class="nav-item"><a class="nav-link" href="{{ url_for('personas_list') }}">Personas</a></li>
+        <li class="nav-item"><a class="nav-link" href="{{ url_for('fotos_list') }}">Fotos</a></li>
+        <li class="nav-item"><a class="nav-link" href="{{ url_for('fotos_revisar') }}">Para revisar</a></li>
+        <li class="nav-item"><a class="nav-link" href="{{ url_for('fotos_upload') }}">Subir fotos</a></li>
+        <li class="nav-item"><a class="nav-link" href="{{ url_for('reportes_index') }}">Reportes</a></li>
+        <li class="nav-item"><a class="nav-link" href="{{ url_for('entregables_list') }}">Entregables</a></li>
+        <li class="nav-item"><a class="nav-link" href="{{ url_for('duplicados') }}">Duplicados</a></li>
+      </ul>
+    </div>
+  </div>
+</nav>
+
+<main class="container-fluid mt-3">
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% for cat, msg in messages %}
+      <div class="alert alert-{{ cat }} alert-dismissible fade show" role="alert">
+        {{ msg }}
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+      </div>
+    {% endfor %}
+  {% endwith %}
+  {% block content %}{% endblock %}
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>
