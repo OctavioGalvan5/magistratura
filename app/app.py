@@ -485,11 +485,22 @@ def _pdf_pages_as_jpg(pdf_bytes: bytes, dpi: int = 200, jpeg_quality: int = 85):
         pdf.close()
 
 
+def _source_already_processed(source_sha: str) -> bool:
+    """True si algún archivo con esta SHA ya se procesó antes (misma lógica que el batch)."""
+    r = q_one(
+        f"SELECT 1 AS x FROM {SCHEMA}.fotos WHERE source_file_sha256 = :s LIMIT 1",
+        s=source_sha,
+    )
+    return r is not None
+
+
 def _persist_upload(*, data: bytes, filename: str, content_type: str, ext: str,
                     persona_id_hint=None, analyze: bool = True,
-                    force: bool = False) -> dict:
+                    force: bool = False,
+                    source_file_sha256: str | None = None) -> dict:
     sha = hashlib.sha256(data).hexdigest()
     object_key = f"originales/{sha[:2]}/{sha}{ext}"
+    src_sha = source_file_sha256 or sha  # trazabilidad: para paginas de PDF apunta al PDF
 
     try:
         minio.stat_object(BUCKET, object_key)
@@ -547,9 +558,10 @@ def _persist_upload(*, data: bytes, filename: str, content_type: str, ext: str,
               tipo = :tp,
               match_status = :ms,
               raw_ocr = CAST(:raw AS JSONB),
+              source_file_sha256 = COALESCE(source_file_sha256, :src),
               processed_at = CASE WHEN :raw IS NULL THEN processed_at ELSE now() END
             WHERE id = :id
-        """, id=foto_id, tp=tipo, ms=match_status,
+        """, id=foto_id, tp=tipo, ms=match_status, src=src_sha,
              raw=json.dumps(ocr, ensure_ascii=False) if ocr else None)
     else:
         foto = q_one_write(f"""
@@ -561,7 +573,7 @@ def _persist_upload(*, data: bytes, filename: str, content_type: str, ext: str,
                CASE WHEN :raw IS NULL THEN NULL ELSE now() END)
             RETURNING id
         """, fn=filename, bk=BUCKET, ok=object_key, ct=content_type, sz=len(data), sh=sha,
-             src=sha, tp=tipo, ms=match_status,
+             src=src_sha, tp=tipo, ms=match_status,
              raw=json.dumps(ocr, ensure_ascii=False) if ocr else None)
         foto_id = foto["id"]
 
@@ -631,10 +643,21 @@ def fotos_upload():
         data = f.read()
 
         if ext == ".pdf":
+            # SHA del PDF entero: sirve para (a) skip temprano si ya se proceso,
+            # (b) source_file_sha256 en cada pagina (trazabilidad).
+            pdf_sha = hashlib.sha256(data).hexdigest()
+
+            if not force and _source_already_processed(pdf_sha):
+                stats["skipped"] += 1
+                flash(f"PDF '{name}' ya se habia procesado antes (mismo SHA). "
+                      f"Tildá 'Reprocesar' si querés forzar.", "info")
+                continue
+
             # Guardamos el PDF original en MinIO (una vez), y despues procesamos cada pagina.
             _persist_upload(
                 data=data, filename=name, content_type="application/pdf",
                 ext=ext, persona_id_hint=persona_id_hint, analyze=False, force=force,
+                source_file_sha256=pdf_sha,
             )
             try:
                 stem = os.path.splitext(name)[0]
@@ -644,6 +667,7 @@ def fotos_upload():
                         data=jpg, filename=fname, content_type="image/jpeg",
                         ext=".jpg", persona_id_hint=persona_id_hint,
                         analyze=analyze, force=force,
+                        source_file_sha256=pdf_sha,  # las paginas apuntan al PDF
                     )
                     _acc(r)
                     stats["paginas_pdf"] += 1
@@ -651,9 +675,20 @@ def fotos_upload():
                 flash(f"Error procesando PDF '{name}': {e}", "danger")
             continue
 
+        # Imagen: skip temprano si ya se procesó (a menos que force).
+        img_sha = hashlib.sha256(data).hexdigest()
+        if not force and _source_already_processed(img_sha):
+            r = _persist_upload(data=data, filename=name, content_type=f.mimetype or "",
+                                ext=ext, persona_id_hint=persona_id_hint,
+                                analyze=False, force=False,
+                                source_file_sha256=img_sha)
+            _acc(r)
+            continue
+
         r = _persist_upload(data=data, filename=name, content_type=f.mimetype or "",
                             ext=ext, persona_id_hint=persona_id_hint,
-                            analyze=analyze, force=force)
+                            analyze=analyze, force=force,
+                            source_file_sha256=img_sha)
         _acc(r)
 
     flash(
