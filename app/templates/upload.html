@@ -8,9 +8,17 @@
 <form method="post" enctype="multipart/form-data" class="card p-3">
   <label class="form-label">Archivos (JPG, PNG, WEBP, HEIC, PDF)</label>
   <input type="file" name="files" class="form-control mb-3" multiple accept=".jpg,.jpeg,.png,.webp,.heic,.pdf">
-  <div class="form-check mb-3">
+  <div class="form-check mb-2">
     <input class="form-check-input" type="checkbox" name="analizar" id="analizar" checked>
     <label class="form-check-label" for="analizar">Analizar automáticamente y vincular / crear persona</label>
+  </div>
+  <div class="form-check mb-3">
+    <input class="form-check-input" type="checkbox" name="force" id="force">
+    <label class="form-check-label" for="force">
+      <strong>Reprocesar aunque ya exista</strong> — si la foto/pagina ya está en la base
+      (mismo SHA), la re-analiza con vision, borra los vinculos previos y arma los nuevos.
+      Útil si la vinculación anterior era incorrecta o querés aplicar un prompt mejorado.
+    </label>
   </div>
   <button class="btn btn-primary">Subir</button>
 </form>

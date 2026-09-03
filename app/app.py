@@ -6,13 +6,13 @@ import hashlib
 from datetime import timedelta
 
 import pypdfium2 as pdfium
-from PIL import Image
 
 from dotenv import load_dotenv
 from flask import (
     Flask, render_template, request, redirect, url_for, flash,
     jsonify, abort,
 )
+from markupsafe import Markup
 from sqlalchemy import create_engine, text
 from minio import Minio
 from minio.error import S3Error
@@ -455,7 +455,8 @@ def _pdf_pages_as_jpg(pdf_bytes: bytes, dpi: int = 200, jpeg_quality: int = 85):
 
 
 def _persist_upload(*, data: bytes, filename: str, content_type: str, ext: str,
-                    persona_id_hint=None, analyze: bool = True) -> dict:
+                    persona_id_hint=None, analyze: bool = True,
+                    force: bool = False) -> dict:
     sha = hashlib.sha256(data).hexdigest()
     object_key = f"originales/{sha[:2]}/{sha}{ext}"
 
@@ -465,14 +466,29 @@ def _persist_upload(*, data: bytes, filename: str, content_type: str, ext: str,
         minio.put_object(BUCKET, object_key, io.BytesIO(data), length=len(data),
                          content_type=content_type or "application/octet-stream")
 
-    already = q_one(f"SELECT id FROM {SCHEMA}.fotos WHERE minio_object_key=:k", k=object_key)
-    if already:
-        # Si el usuario forzó una persona, aseguramos el link
+    already = q_one(f"SELECT id, tipo, match_status FROM {SCHEMA}.fotos WHERE minio_object_key=:k", k=object_key)
+
+    if already and not force:
+        # Comportamiento normal: no reprocesar, informar duplicado.
         if persona_id_hint:
             _link(already["id"], persona_id_hint,
                   {"dni": None, "nombre_apellido": None}, creada=False, campos=[])
-        return {"status": "duplicado", "foto_id": already["id"]}
+        linked = q(f"""
+            SELECT p.id, p.nombre_apellido
+            FROM {SCHEMA}.fotos_personas fp
+            JOIN {SCHEMA}.personas p ON p.id = fp.persona_id
+            WHERE fp.foto_id = :fid
+            ORDER BY p.nombre_apellido
+        """, fid=already["id"])
+        return {
+            "status": "duplicado",
+            "foto_id": already["id"],
+            "tipo": already["tipo"],
+            "match_status": already["match_status"],
+            "personas_vinculadas": [dict(x) for x in linked],
+        }
 
+    # ── OCR ─────────────────────────────────────────────
     ocr = None
     tipo = None
     personas_det: list = []
@@ -490,21 +506,35 @@ def _persist_upload(*, data: bytes, filename: str, content_type: str, ext: str,
     else:
         match_status = "matched"
 
-    foto = q_one_write(f"""
-        INSERT INTO {SCHEMA}.fotos
-          (filename_original, minio_bucket, minio_object_key, content_type, size_bytes, sha256,
-           source_file_sha256, tipo, match_status, raw_ocr, processed_at)
-        VALUES
-          (:fn, :bk, :ok, :ct, :sz, :sh, :src, :tp, :ms, CAST(:raw AS JSONB),
-           CASE WHEN :raw IS NULL THEN NULL ELSE now() END)
-        RETURNING id
-    """,
-        fn=filename, bk=BUCKET, ok=object_key, ct=content_type, sz=len(data), sh=sha,
-        src=sha, tp=tipo, ms=match_status,
-        raw=json.dumps(ocr, ensure_ascii=False) if ocr else None,
-    )
-    foto_id = foto["id"]
+    # ── Insertar foto nueva o actualizar existente si es --force ───
+    if already and force:
+        foto_id = already["id"]
+        # Limpiamos vinculos previos para que las nuevas personas queden como fuente de verdad.
+        exec_sql(f"DELETE FROM {SCHEMA}.fotos_personas WHERE foto_id=:f", f=foto_id)
+        exec_sql(f"""
+            UPDATE {SCHEMA}.fotos SET
+              tipo = :tp,
+              match_status = :ms,
+              raw_ocr = CAST(:raw AS JSONB),
+              processed_at = CASE WHEN :raw IS NULL THEN processed_at ELSE now() END
+            WHERE id = :id
+        """, id=foto_id, tp=tipo, ms=match_status,
+             raw=json.dumps(ocr, ensure_ascii=False) if ocr else None)
+    else:
+        foto = q_one_write(f"""
+            INSERT INTO {SCHEMA}.fotos
+              (filename_original, minio_bucket, minio_object_key, content_type, size_bytes, sha256,
+               source_file_sha256, tipo, match_status, raw_ocr, processed_at)
+            VALUES
+              (:fn, :bk, :ok, :ct, :sz, :sh, :src, :tp, :ms, CAST(:raw AS JSONB),
+               CASE WHEN :raw IS NULL THEN NULL ELSE now() END)
+            RETURNING id
+        """, fn=filename, bk=BUCKET, ok=object_key, ct=content_type, sz=len(data), sh=sha,
+             src=sha, tp=tipo, ms=match_status,
+             raw=json.dumps(ocr, ensure_ascii=False) if ocr else None)
+        foto_id = foto["id"]
 
+    # ── Linkeo ──────────────────────────────────────────
     creadas = enriquecidas = 0
     if persona_id_hint:
         _link(foto_id, persona_id_hint,
@@ -519,7 +549,8 @@ def _persist_upload(*, data: bytes, filename: str, content_type: str, ext: str,
             except Exception as e:
                 app.logger.warning("link error: %s", e)
 
-    return {"status": "ok", "foto_id": foto_id, "match_status": match_status,
+    return {"status": "reprocesado" if (already and force) else "ok",
+            "foto_id": foto_id, "match_status": match_status,
             "tipo": tipo, "personas": len(personas_det),
             "creadas": creadas, "enriquecidas": enriquecidas}
 
@@ -532,6 +563,7 @@ def fotos_upload():
     persona_id_hint = request.form.get("persona_id")
     persona_id_hint = int(persona_id_hint) if persona_id_hint and persona_id_hint.isdigit() else None
     analyze = request.form.get("analizar", "on") == "on"
+    force = request.form.get("force") == "on"
 
     files = request.files.getlist("files")
     if not files:
@@ -539,13 +571,22 @@ def fotos_upload():
         return redirect(url_for("fotos_upload"))
 
     stats = {"ok": 0, "matched": 0, "sin_match": 0, "creadas": 0, "enriquecidas": 0,
-             "duplicadas": 0, "skipped": 0, "paginas_pdf": 0}
+             "duplicadas": 0, "reprocesadas": 0, "skipped": 0, "paginas_pdf": 0}
+    duplicados_info: list = []
 
     def _acc(r):
         if r["status"] == "duplicado":
             stats["duplicadas"] += 1
+            duplicados_info.append({
+                "foto_id": r["foto_id"],
+                "match_status": r.get("match_status"),
+                "personas": r.get("personas_vinculadas", []),
+            })
         else:
-            stats["ok"] += 1
+            if r["status"] == "reprocesado":
+                stats["reprocesadas"] += 1
+            else:
+                stats["ok"] += 1
             stats[r["match_status"]] = stats.get(r["match_status"], 0) + 1
             stats["creadas"] += r.get("creadas", 0)
             stats["enriquecidas"] += r.get("enriquecidas", 0)
@@ -562,7 +603,7 @@ def fotos_upload():
             # Guardamos el PDF original en MinIO (una vez), y despues procesamos cada pagina.
             _persist_upload(
                 data=data, filename=name, content_type="application/pdf",
-                ext=ext, persona_id_hint=persona_id_hint, analyze=False,
+                ext=ext, persona_id_hint=persona_id_hint, analyze=False, force=force,
             )
             try:
                 stem = os.path.splitext(name)[0]
@@ -570,7 +611,8 @@ def fotos_upload():
                     fname = f"{stem}__p{page_num}.jpg"
                     r = _persist_upload(
                         data=jpg, filename=fname, content_type="image/jpeg",
-                        ext=".jpg", persona_id_hint=persona_id_hint, analyze=analyze,
+                        ext=".jpg", persona_id_hint=persona_id_hint,
+                        analyze=analyze, force=force,
                     )
                     _acc(r)
                     stats["paginas_pdf"] += 1
@@ -579,16 +621,47 @@ def fotos_upload():
             continue
 
         r = _persist_upload(data=data, filename=name, content_type=f.mimetype or "",
-                            ext=ext, persona_id_hint=persona_id_hint, analyze=analyze)
+                            ext=ext, persona_id_hint=persona_id_hint,
+                            analyze=analyze, force=force)
         _acc(r)
 
     flash(
-        f"Subidas: {stats['ok']} · matched: {stats['matched']} · sin_match: {stats['sin_match']} · "
+        f"Subidas: {stats['ok']} · reprocesadas: {stats['reprocesadas']} · "
+        f"matched: {stats['matched']} · sin_match: {stats['sin_match']} · "
         f"personas creadas: {stats['creadas']} · enriquecidas: {stats['enriquecidas']} · "
         f"duplicadas: {stats['duplicadas']} · omitidas: {stats['skipped']}"
         + (f" · paginas PDF: {stats['paginas_pdf']}" if stats['paginas_pdf'] else ""),
         "success",
     )
+
+    # Si hubo duplicados, avisar al usuario a qué personas ya estaban vinculadas
+    # para que sepa qué hacer con esa foto (mirarla, re-vincular, etc.).
+    if duplicados_info:
+        for d in duplicados_info:
+            personas = d["personas"]
+            if personas:
+                # Markup.format() escapa los strings (nombre_apellido) que vienen
+                # de la DB, evitando inyección HTML si alguien puso <script> en un nombre.
+                links = [Markup("<a href='{}'>{}</a>").format(
+                            url_for('persona_detail', pid=x['id']),
+                            x['nombre_apellido']
+                         ) for x in personas[:5]]
+                nombres = Markup(", ").join(links)
+                extra = f" (+{len(personas)-5} más)" if len(personas) > 5 else ""
+                flash(
+                    Markup(
+                        "Foto ya existente (id={}, estado={}) ya está vinculada a: "
+                    ).format(d["foto_id"], d["match_status"]) + nombres + extra,
+                    "info",
+                )
+            else:
+                flash(
+                    Markup(
+                        "Foto ya existente (id={}, estado={}) pero sin personas vinculadas — "
+                        "<a href='{}'>revisá para vincularla</a>."
+                    ).format(d["foto_id"], d["match_status"], url_for('fotos_revisar')),
+                    "warning",
+                )
     if persona_id_hint:
         return redirect(url_for("persona_detail", pid=persona_id_hint))
     return redirect(url_for("fotos_list"))
