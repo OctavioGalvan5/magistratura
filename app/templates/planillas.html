@@ -1,0 +1,124 @@
+{% extends "base.html" %}
+{% block title %}Planillas de aval{% endblock %}
+{% block content %}
+
+<div class="d-flex justify-content-between align-items-start mb-3">
+  <div>
+    <h4>Planillas de aval <span class="badge bg-primary">{{ planillas|length }}</span></h4>
+    <div class="text-muted small">
+      Cada planilla escaneada con las personas que aparecen firmando.
+      Total firmas: {{ planillas | sum(attribute='n_personas') }}.
+    </div>
+  </div>
+  <div>
+    <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('fotos_list', tipo='planilla_aval') }}">
+      Ver en /fotos
+    </a>
+  </div>
+</div>
+
+<form class="row g-2 mb-3" method="get">
+  <div class="col-md-4">
+    <select class="form-select form-select-sm" name="jur">
+      <option value="">Todas las jurisdicciones</option>
+      {% for j in jurisdicciones %}
+        <option value="{{ j }}" {% if j == f_jur %}selected{% endif %}>{{ j }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="col-md-2 d-grid">
+    <button class="btn btn-primary btn-sm">Filtrar</button>
+  </div>
+</form>
+
+{% if not planillas %}
+  <div class="alert alert-warning">No hay planillas con los filtros actuales.</div>
+{% endif %}
+
+{% for pl in planillas %}
+<div class="card mb-3">
+  <div class="row g-0">
+    <div class="col-md-4">
+      {% if pl.content_type and 'image' in pl.content_type %}
+        <a href="{{ pl.url }}" target="_blank">
+          <img src="{{ pl.url }}" class="img-fluid rounded-start" style="max-height:350px;object-fit:cover;width:100%;">
+        </a>
+      {% else %}
+        <div class="p-3 text-center">
+          <a class="btn btn-outline-primary btn-sm" href="{{ pl.url }}" target="_blank">Abrir archivo</a>
+        </div>
+      {% endif %}
+    </div>
+    <div class="col-md-8">
+      <div class="card-body">
+        <div class="d-flex justify-content-between align-items-start">
+          <div>
+            <h6 class="mb-1">
+              <span class="text-muted small">#{{ pl.id }}</span>
+              {{ pl.filename_original }}
+            </h6>
+            <div class="small text-muted">
+              <span class="badge status-{{ pl.match_status }}">{{ pl.match_status }}</span>
+              {% for j in pl.jurisdicciones %}
+                <span class="badge badge-jur">{{ j }}</span>
+              {% endfor %}
+              · {{ pl.n_personas }} persona{{ 's' if pl.n_personas != 1 else '' }}
+              · subida {{ pl.uploaded_at.strftime('%Y-%m-%d %H:%M') }}
+            </div>
+          </div>
+          <a class="btn btn-sm btn-outline-primary" href="{{ pl.url }}" target="_blank">Ver planilla</a>
+        </div>
+
+        {% if pl.personas %}
+        <div class="mt-3">
+          <div class="table-responsive">
+            <table class="table table-sm table-hover mb-0">
+              <thead class="small">
+                <tr>
+                  <th style="width:5%">#</th>
+                  <th>Nombre</th>
+                  <th>DNI</th>
+                  <th>Matrícula</th>
+                  <th>Jurisdicción</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+              {% for pp in pl.personas %}
+                <tr>
+                  <td class="text-muted small">{{ loop.index }}</td>
+                  <td>
+                    <a href="{{ url_for('persona_detail', pid=pp.id) }}">{{ pp.nombre_apellido }}</a>
+                    {% if pp.auto_creada %}<span class="badge bg-info ms-1">auto</span>{% endif %}
+                    {% if pp.nombre_detectado and pp.nombre_detectado != pp.nombre_apellido %}
+                      <div class="small text-muted">detectado: {{ pp.nombre_detectado }}</div>
+                    {% endif %}
+                  </td>
+                  <td>{{ pp.dni or '—' }}
+                    {% if pp.dni_detectado and pp.dni_detectado != pp.dni %}
+                      <div class="small text-muted">det: {{ pp.dni_detectado }}</div>
+                    {% endif %}
+                  </td>
+                  <td>
+                    {% if pp.tomo and pp.folio %}T° {{ pp.tomo }} F° {{ pp.folio }}
+                    {% elif pp.matricula %}<span class="small text-muted">{{ pp.matricula }}</span>
+                    {% else %}—{% endif %}
+                  </td>
+                  <td><span class="badge badge-jur">{{ pp.jurisdiccion or '—' }}</span></td>
+                  <td><a class="btn btn-sm btn-outline-secondary" href="{{ url_for('persona_detail', pid=pp.id) }}">Ver</a></td>
+                </tr>
+              {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        {% else %}
+        <div class="mt-2 text-muted small">Sin personas vinculadas.</div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endfor %}
+
+{% endblock %}

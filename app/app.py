@@ -78,9 +78,11 @@ def _personas_filtros_sql(args) -> tuple[str, dict]:
     con_foto = args.get("con_foto", "")
     origen = args.get("origen", "")
     # Filtros por tipo de foto vinculada — tri-state cada uno: "si" / "no" / ""
-    has_planilla = args.get("has_planilla", "")
-    has_dni      = args.get("has_dni", "")
-    has_otro     = args.get("has_otro", "")
+    has_por_tipo = {
+        "planilla_aval":                      args.get("has_planilla", ""),
+        "dni":                                args.get("has_dni", ""),
+        "otro":                               args.get("has_otro", ""),
+    }
 
     where = []
     params: dict = {}
@@ -105,18 +107,18 @@ def _personas_filtros_sql(args) -> tuple[str, dict]:
 
     # Filtros por tipo de foto vinculada. Cada uno es tri-state independiente.
     # 'otro' incluye tanto tipo='otro' como filas con tipo NULL (fotos sin analizar).
-    tipo_clauses = {
-        "planilla": ("has_planilla", "f.tipo = 'planilla_aval'"),
-        "dni":      ("has_dni",      "f.tipo = 'dni'"),
-        "otro":     ("has_otro",     "(f.tipo = 'otro' OR f.tipo IS NULL)"),
+    condiciones = {
+        "planilla_aval": "f.tipo = 'planilla_aval'",
+        "dni":           "f.tipo = 'dni'",
+        "otro":          "(f.tipo = 'otro' OR f.tipo IS NULL)",
     }
-    for _key, (var_name, cond) in tipo_clauses.items():
-        val = locals()[var_name]
-        if val == "si":
+    for tipo_key, valor in has_por_tipo.items():
+        cond = condiciones[tipo_key]
+        if valor == "si":
             where.append(f"""EXISTS (SELECT 1 FROM {SCHEMA}.fotos_personas fp
                                      JOIN {SCHEMA}.fotos f ON f.id = fp.foto_id
                                      WHERE fp.persona_id = p.id AND {cond})""")
-        elif val == "no":
+        elif valor == "no":
             where.append(f"""NOT EXISTS (SELECT 1 FROM {SCHEMA}.fotos_personas fp
                                          JOIN {SCHEMA}.fotos f ON f.id = fp.foto_id
                                          WHERE fp.persona_id = p.id AND {cond})""")
@@ -898,6 +900,68 @@ def reporte_excel(slug):
     buf.seek(0)
     return send_file(buf, download_name=f"{slug}.xlsx", as_attachment=True,
                      mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+
+# ─────────── Planillas de aval ───────────
+
+@app.route("/planillas")
+def planillas_list():
+    """Todas las planillas detectadas y las personas que aparecen firmando en cada una."""
+    jur_filter = (request.args.get("jur") or "").strip()
+
+    # Obtenemos todas las fotos tipo planilla_aval con conteo y jurisdicciones
+    where_jur = ""
+    params: dict = {}
+    if jur_filter:
+        where_jur = """AND EXISTS (
+            SELECT 1 FROM avales_2026.fotos_personas fp2
+            JOIN avales_2026.personas p2 ON p2.id = fp2.persona_id
+            WHERE fp2.foto_id = f.id AND p2.jurisdiccion = :jur
+        )"""
+        params["jur"] = jur_filter
+
+    planillas = q(f"""
+        SELECT f.id, f.filename_original, f.minio_object_key, f.content_type,
+               f.match_status, f.uploaded_at,
+               (SELECT COUNT(*) FROM {SCHEMA}.fotos_personas fp WHERE fp.foto_id = f.id) AS n_personas
+        FROM {SCHEMA}.fotos f
+        WHERE f.tipo = 'planilla_aval'
+          {where_jur}
+        ORDER BY f.uploaded_at DESC
+    """, **params)
+
+    # Por cada planilla, sus personas linkeadas
+    result = []
+    for pl in planillas:
+        personas = q(f"""
+            SELECT p.id, p.nombre_apellido, p.dni, p.jurisdiccion,
+                   p.matricula, p.tomo, p.folio,
+                   fp.dni_detectado, fp.nombre_detectado,
+                   (p.observaciones ILIKE 'Creada auto%%') AS auto_creada
+            FROM {SCHEMA}.fotos_personas fp
+            JOIN {SCHEMA}.personas p ON p.id = fp.persona_id
+            WHERE fp.foto_id = :fid
+            ORDER BY p.nombre_apellido
+        """, fid=pl["id"])
+        result.append({
+            **dict(pl),
+            "url": presigned(pl["minio_object_key"]),
+            "personas": [dict(x) for x in personas],
+            "jurisdicciones": sorted({x["jurisdiccion"] for x in personas if x["jurisdiccion"]}),
+        })
+
+    # Lista de jurisdicciones para el filtro (de personas que aparecen en planillas)
+    juris = [r["jurisdiccion"] for r in q(f"""
+        SELECT DISTINCT p.jurisdiccion
+        FROM {SCHEMA}.personas p
+        JOIN {SCHEMA}.fotos_personas fp ON fp.persona_id = p.id
+        JOIN {SCHEMA}.fotos f ON f.id = fp.foto_id
+        WHERE p.jurisdiccion IS NOT NULL AND f.tipo = 'planilla_aval'
+        ORDER BY 1
+    """)]
+
+    return render_template("planillas.html",
+                           planillas=result, jurisdicciones=juris, f_jur=jur_filter)
 
 
 # ─────────── Entregables (PDFs por jurisdicción) ───────────
