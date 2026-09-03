@@ -140,6 +140,65 @@ def personas_list():
     )
 
 
+@app.route("/persona/nueva", methods=["GET", "POST"])
+def persona_nueva():
+    if request.method == "GET":
+        return render_template("persona_nueva.html")
+
+    f = request.form
+    dni = (f.get("dni") or "").strip() or None
+    nombre = (f.get("nombre_apellido") or "").strip()
+    if not nombre:
+        flash("El nombre es obligatorio.", "warning")
+        return redirect(url_for("persona_nueva"))
+
+    tomo = (f.get("tomo") or "").strip()
+    folio = (f.get("folio") or "").strip()
+    dni_recibido = None
+    if f.get("dni_recibido") == "si":
+        dni_recibido = True
+    elif f.get("dni_recibido") == "no":
+        dni_recibido = False
+
+    try:
+        with engine.begin() as c:
+            new_p = c.execute(text(f"""
+                INSERT INTO {SCHEMA}.personas
+                  (nombre_apellido, dni, genero, matricula, tomo, folio,
+                   domicilio, jurisdiccion, dni_recibido, cotejado, observaciones)
+                VALUES (:n, :d, :g, :m, :t, :fo, :dom, :jur, :dnir, :cot, :obs)
+                RETURNING id
+            """), {
+                "n": nombre, "d": dni,
+                "g": (f.get("genero") or "").strip() or None,
+                "m": (f.get("matricula") or "").strip() or None,
+                "t": int(tomo) if tomo.isdigit() else None,
+                "fo": int(folio) if folio.isdigit() else None,
+                "dom": (f.get("domicilio") or "").strip() or None,
+                "jur": (f.get("jurisdiccion") or "").strip() or None,
+                "dnir": dni_recibido,
+                "cot": (f.get("cotejado") or "").strip() or None,
+                "obs": (f.get("observaciones") or "").strip() or None,
+            }).mappings().first()
+        flash(f"Persona creada (id={new_p['id']}).", "success")
+        return redirect(url_for("persona_detail", pid=new_p["id"]))
+    except Exception as e:
+        flash(f"Error al crear: {e}", "danger")
+        return redirect(url_for("persona_nueva"))
+
+
+@app.route("/persona/<int:pid>/eliminar", methods=["POST"])
+def persona_eliminar(pid):
+    p = q_one(f"SELECT nombre_apellido FROM {SCHEMA}.personas WHERE id=:id", id=pid)
+    if not p:
+        abort(404)
+    # Las fotos vinculadas via fotos_personas se borran en cascada (FK ON DELETE CASCADE).
+    # Las fotos con persona_id directo pasan a NULL (FK ON DELETE SET NULL).
+    exec_sql(f"DELETE FROM {SCHEMA}.personas WHERE id=:id", id=pid)
+    flash(f"Persona '{p['nombre_apellido']}' eliminada.", "info")
+    return redirect(url_for("personas_list"))
+
+
 @app.route("/personas.xlsx")
 def personas_excel():
     """Exporta el listado de personas (respetando filtros de la URL) a Excel."""

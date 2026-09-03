@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}Nueva persona{% endblock %}
+{% block content %}
+
+<div class="d-flex justify-content-between align-items-start mb-3">
+  <h4>Nueva persona</h4>
+  <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('personas_list') }}">← Volver</a>
+</div>
+
+<div class="card">
+  <div class="card-body">
+  <form method="post">
+    <div class="row g-2">
+      <div class="col-12">
+        <label class="form-label small">Nombre y apellido *</label>
+        <input class="form-control" name="nombre_apellido" required autofocus>
+      </div>
+      <div class="col-md-6">
+        <label class="form-label small">DNI</label>
+        <input class="form-control" name="dni">
+      </div>
+      <div class="col-md-3">
+        <label class="form-label small">Género</label>
+        <select class="form-select" name="genero">
+          <option value=""></option>
+          <option value="M">M</option>
+          <option value="F">F</option>
+          <option value="X">X</option>
+        </select>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label small">DNI recibido</label>
+        <select class="form-select" name="dni_recibido">
+          <option value="">—</option>
+          <option value="si">Sí</option>
+          <option value="no">No</option>
+        </select>
+      </div>
+      <div class="col-md-6">
+        <label class="form-label small">Matrícula (texto)</label>
+        <input class="form-control" name="matricula" placeholder="Ej: T° 144 F° 437">
+      </div>
+      <div class="col-md-3">
+        <label class="form-label small">Tomo</label>
+        <input class="form-control" name="tomo">
+      </div>
+      <div class="col-md-3">
+        <label class="form-label small">Folio</label>
+        <input class="form-control" name="folio">
+      </div>
+      <div class="col-12">
+        <label class="form-label small">Domicilio</label>
+        <input class="form-control" name="domicilio">
+      </div>
+      <div class="col-md-6">
+        <label class="form-label small">Jurisdicción</label>
+        <input class="form-control" name="jurisdiccion">
+      </div>
+      <div class="col-md-6">
+        <label class="form-label small">Cotejado</label>
+        <input class="form-control" name="cotejado" placeholder="OK / VERIFICAR / …">
+      </div>
+      <div class="col-12">
+        <label class="form-label small">Observaciones</label>
+        <textarea class="form-control" name="observaciones" rows="2"></textarea>
+      </div>
+      <div class="col-12 text-end mt-3">
+        <a class="btn btn-outline-secondary" href="{{ url_for('personas_list') }}">Cancelar</a>
+        <button class="btn btn-primary">Crear persona</button>
+      </div>
+    </div>
+  </form>
+  </div>
+</div>
+{% endblock %}

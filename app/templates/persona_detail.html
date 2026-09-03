@@ -10,7 +10,13 @@
       {% if p.jurisdiccion %} · <span class="badge badge-jur">{{ p.jurisdiccion }}</span>{% endif %}
     </div>
   </div>
-  <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('personas_list') }}">← Volver al listado</a>
+  <div class="d-flex gap-2">
+    <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('personas_list') }}">← Volver al listado</a>
+    <form method="post" action="{{ url_for('persona_eliminar', pid=p.id) }}"
+          onsubmit="return confirm('¿Eliminar a {{ p.nombre_apellido|e }}? Las fotos vinculadas se van a desvincular pero NO se borran.');">
+      <button class="btn btn-outline-danger btn-sm">Eliminar persona</button>
+    </form>
+  </div>
 </div>
 
 <div class="row g-3">

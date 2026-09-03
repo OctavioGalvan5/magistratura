@@ -35,10 +35,13 @@
 
 <div class="d-flex justify-content-between align-items-center mb-2">
   <div class="text-muted small">{{ personas|length }} resultados</div>
-  <a class="btn btn-sm btn-outline-success"
-     href="{{ url_for('personas_excel', q=f_search, jur=f_jur, dni_recibido=f_dni_r, con_foto=f_con_foto, origen=f_origen) }}">
-    Descargar Excel
-  </a>
+  <div>
+    <a class="btn btn-sm btn-primary" href="{{ url_for('persona_nueva') }}">+ Nueva persona</a>
+    <a class="btn btn-sm btn-outline-success"
+       href="{{ url_for('personas_excel', q=f_search, jur=f_jur, dni_recibido=f_dni_r, con_foto=f_con_foto, origen=f_origen) }}">
+      Descargar Excel
+    </a>
+  </div>
 </div>
 
 <div class="table-responsive">
