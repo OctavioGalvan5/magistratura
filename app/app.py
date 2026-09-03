@@ -5,6 +5,9 @@ import json
 import hashlib
 from datetime import timedelta
 
+import pypdfium2 as pdfium
+from PIL import Image
+
 from dotenv import load_dotenv
 from flask import (
     Flask, render_template, request, redirect, url_for, flash,
@@ -435,6 +438,22 @@ def _link(foto_id: int, persona_id: int, det: dict, creada: bool, campos: list[s
         c=creada, ce=",".join(campos) if campos else None)
 
 
+def _pdf_pages_as_jpg(pdf_bytes: bytes, dpi: int = 200, jpeg_quality: int = 85):
+    """Rinde cada pagina de un PDF como JPEG. Yield (page_num, jpeg_bytes)."""
+    pdf = pdfium.PdfDocument(pdf_bytes)
+    try:
+        for i in range(len(pdf)):
+            page = pdf[i]
+            pil = page.render(scale=dpi / 72).to_pil()
+            if pil.mode != "RGB":
+                pil = pil.convert("RGB")
+            buf = io.BytesIO()
+            pil.save(buf, format="JPEG", quality=jpeg_quality, optimize=True)
+            yield i + 1, buf.getvalue()
+    finally:
+        pdf.close()
+
+
 def _persist_upload(*, data: bytes, filename: str, content_type: str, ext: str,
                     persona_id_hint=None, analyze: bool = True) -> dict:
     sha = hashlib.sha256(data).hexdigest()
@@ -520,16 +539,9 @@ def fotos_upload():
         return redirect(url_for("fotos_upload"))
 
     stats = {"ok": 0, "matched": 0, "sin_match": 0, "creadas": 0, "enriquecidas": 0,
-             "duplicadas": 0, "skipped": 0}
-    for f in files:
-        name = f.filename or ""
-        ext = os.path.splitext(name)[1].lower()
-        if ext not in ALLOWED_EXT:
-            stats["skipped"] += 1
-            continue
-        data = f.read()
-        r = _persist_upload(data=data, filename=name, content_type=f.mimetype or "",
-                            ext=ext, persona_id_hint=persona_id_hint, analyze=analyze)
+             "duplicadas": 0, "skipped": 0, "paginas_pdf": 0}
+
+    def _acc(r):
         if r["status"] == "duplicado":
             stats["duplicadas"] += 1
         else:
@@ -538,10 +550,43 @@ def fotos_upload():
             stats["creadas"] += r.get("creadas", 0)
             stats["enriquecidas"] += r.get("enriquecidas", 0)
 
+    for f in files:
+        name = f.filename or ""
+        ext = os.path.splitext(name)[1].lower()
+        if ext not in ALLOWED_EXT:
+            stats["skipped"] += 1
+            continue
+        data = f.read()
+
+        if ext == ".pdf":
+            # Guardamos el PDF original en MinIO (una vez), y despues procesamos cada pagina.
+            _persist_upload(
+                data=data, filename=name, content_type="application/pdf",
+                ext=ext, persona_id_hint=persona_id_hint, analyze=False,
+            )
+            try:
+                stem = os.path.splitext(name)[0]
+                for page_num, jpg in _pdf_pages_as_jpg(data):
+                    fname = f"{stem}__p{page_num}.jpg"
+                    r = _persist_upload(
+                        data=jpg, filename=fname, content_type="image/jpeg",
+                        ext=".jpg", persona_id_hint=persona_id_hint, analyze=analyze,
+                    )
+                    _acc(r)
+                    stats["paginas_pdf"] += 1
+            except Exception as e:
+                flash(f"Error procesando PDF '{name}': {e}", "danger")
+            continue
+
+        r = _persist_upload(data=data, filename=name, content_type=f.mimetype or "",
+                            ext=ext, persona_id_hint=persona_id_hint, analyze=analyze)
+        _acc(r)
+
     flash(
         f"Subidas: {stats['ok']} · matched: {stats['matched']} · sin_match: {stats['sin_match']} · "
         f"personas creadas: {stats['creadas']} · enriquecidas: {stats['enriquecidas']} · "
-        f"duplicadas: {stats['duplicadas']} · omitidas: {stats['skipped']}",
+        f"duplicadas: {stats['duplicadas']} · omitidas: {stats['skipped']}"
+        + (f" · paginas PDF: {stats['paginas_pdf']}" if stats['paginas_pdf'] else ""),
         "success",
     )
     if persona_id_hint:
