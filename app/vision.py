@@ -47,12 +47,17 @@ OPENAI_MODEL = "gpt-4o-mini"
 PROMPT = (
     "Sos un extractor de datos para un padrón de abogados. "
     "Analizá la imagen y clasificala en UNO de estos tipos:\n"
-    "  - 'dni'            → es la foto del anverso o reverso de un DNI argentino.\n"
-    "  - 'planilla_aval'  → es una PLANILLA con una tabla de firmantes (fila por persona con "
+    "  - 'dni'            → foto del anverso o reverso de un DNI argentino.\n"
+    "  - 'planilla_aval'  → PLANILLA con una tabla de firmantes (fila por persona con "
     "                       columnas nombre, DNI, matrícula, jurisdicción, firma, etc.).\n"
+    "  - 'credencial'     → CREDENCIAL / carnet de matrícula profesional del Colegio de "
+    "                       Abogados o Cámara Federal. Suele tener foto, nombre, tomo, folio, "
+    "                       y a veces DNI. NO es un DNI ni una planilla.\n"
     "  - 'otro'           → cualquier otra cosa (foto ilegible, chat, sticker, comprobante, etc.).\n\n"
     "Devolvé UNA lista 'personas' con TODAS las personas detectadas:\n"
     "  - Si es un DNI: 1 sola persona con dni + nombre_apellido + genero + fecha_nacimiento.\n"
+    "  - Si es una credencial: 1 sola persona con nombre_apellido + tomo + folio + matrícula "
+    "    (y dni + jurisdicción si son visibles).\n"
     "  - Si es una planilla: una entrada por FILA CON DATOS (ignorá filas vacías). "
     "    Extraé DNI, nombre_apellido, genero (M/F/X), matrícula, jurisdicción. "
     "    Cuando la matrícula tenga formato 'Tomo N Folio M' o 'T° N F° M', devolvé también los enteros "
@@ -70,7 +75,7 @@ PROMPT = (
 SCHEMA = {
     "type": "object",
     "properties": {
-        "tipo": {"type": "string", "enum": ["dni", "planilla_aval", "otro"]},
+        "tipo": {"type": "string", "enum": ["dni", "planilla_aval", "credencial", "otro"]},
         "personas": {
             "type": "array",
             "items": {

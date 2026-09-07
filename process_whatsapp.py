@@ -18,12 +18,15 @@ Por cada persona detectada:
 Idempotencia: source_file_sha256 evita reprocesar el mismo archivo fuente.
 
 Uso:
-    python process_whatsapp.py                    # procesa todo
-    python process_whatsapp.py --limit 5         # solo los primeros N
-    python process_whatsapp.py --no-analyze      # sube sin OCR
-    python process_whatsapp.py --dry-run         # lista sin hacer nada
-    python process_whatsapp.py --force           # reprocesa aunque ya se hizo
-    python process_whatsapp.py --only <texto>    # solo archivos cuyo nombre contenga texto
+    python process_whatsapp.py                                  # procesa todo (carpeta WhatsApp default)
+    python process_whatsapp.py --folder "path/a/otra/carpeta"   # procesa otra carpeta
+    python process_whatsapp.py --jurisdiccion "Cordoba"         # todas las nuevas personas → Cordoba
+    python process_whatsapp.py --folder "..." --jurisdiccion Cordoba
+    python process_whatsapp.py --limit 5                        # solo los primeros N
+    python process_whatsapp.py --no-analyze                     # sube sin OCR
+    python process_whatsapp.py --dry-run                        # lista sin hacer nada
+    python process_whatsapp.py --force                          # reprocesa aunque ya se hizo
+    python process_whatsapp.py --only <texto>                   # solo archivos cuyo nombre contenga texto
 """
 import os
 import io
@@ -55,7 +58,12 @@ load_dotenv()
 
 SCHEMA = "avales_2026"
 BUCKET = "avales-eleccion-2026"
-FOLDER = Path(r"c:\Users\octav\Downloads\Consejo de la magistratura\WhatsApp Chat - Avales CMF")
+FOLDER_DEFAULT = Path(r"c:\Users\octav\Downloads\Consejo de la magistratura\WhatsApp Chat - Avales CMF")
+
+# Se sobreescribe desde CLI. Si tiene valor, las personas detectadas sin jurisdicción
+# reciben esta como default. NO pisa la que ya trae una persona existente en la DB
+# ni pisa la que la visión sí detectó desde una planilla.
+DEFAULT_JURISDICCION: str | None = None
 
 engine = create_engine(os.environ["DB_CONNECTION_STRING"], pool_pre_ping=True)
 minio = Minio(
@@ -126,15 +134,40 @@ def _find_or_create_persona(det: dict) -> tuple[int, bool, list[str]]:
     """
     Recibe un dict con datos detectados (dni, nombre_apellido, genero, tomo, folio,
     matricula, jurisdiccion). Devuelve (persona_id, creada, campos_enriquecidos).
+
+    Match: prioridad DNI. Si no hay DNI pero hay tomo+folio (típico de credenciales
+    de matrícula que no muestran DNI), busca por tomo+folio como fallback.
     """
     dni = det.get("dni")
-    if not dni:
-        raise ValueError("_find_or_create_persona requiere dni")
+    tomo = det.get("tomo")
+    folio = det.get("folio")
 
-    existing = q_one(f"""
-        SELECT id, nombre_apellido, genero, matricula, tomo, folio, jurisdiccion
-        FROM {SCHEMA}.personas WHERE dni = :d
-    """, d=dni)
+    if not dni and not (tomo and folio):
+        raise ValueError("_find_or_create_persona necesita dni o tomo+folio")
+
+    if dni:
+        existing = q_one(f"""
+            SELECT id, nombre_apellido, dni, genero, matricula, tomo, folio, jurisdiccion
+            FROM {SCHEMA}.personas WHERE dni = :d
+        """, d=dni)
+    else:
+        # Fallback por matrícula (tomo + folio). Puede ser ambiguo entre jurisdicciones,
+        # así que si el det trae jurisdicción la usamos como desempate.
+        jur = det.get("jurisdiccion")
+        if jur:
+            existing = q_one(f"""
+                SELECT id, nombre_apellido, dni, genero, matricula, tomo, folio, jurisdiccion
+                FROM {SCHEMA}.personas
+                WHERE tomo = :t AND folio = :f AND jurisdiccion = :j
+                LIMIT 1
+            """, t=tomo, f=folio, j=jur)
+        else:
+            existing = q_one(f"""
+                SELECT id, nombre_apellido, dni, genero, matricula, tomo, folio, jurisdiccion
+                FROM {SCHEMA}.personas
+                WHERE tomo = :t AND folio = :f
+                LIMIT 1
+            """, t=tomo, f=folio)
 
     if existing:
         # Enriquecer campos vacíos
@@ -151,14 +184,18 @@ def _find_or_create_persona(det: dict) -> tuple[int, bool, list[str]]:
         return existing["id"], False, list(updates.keys())
 
     # Crear persona nueva
+    fallback_nombre = (
+        det.get("nombre_apellido")
+        or (f"(pendiente) DNI {dni}" if dni else f"(pendiente) T{tomo} F{folio}")
+    )
     new_p = q_one_write(f"""
         INSERT INTO {SCHEMA}.personas
           (nombre_apellido, dni, genero, matricula, tomo, folio, jurisdiccion, observaciones)
         VALUES (:n, :d, :g, :m, :t, :f, :j, :obs)
         RETURNING id
     """,
-        n=det.get("nombre_apellido") or f"(pendiente) DNI {dni}",
-        d=dni,
+        n=fallback_nombre,
+        d=dni,  # puede ser None si vino de una credencial sin DNI legible
         g=det.get("genero"),
         m=det.get("matricula"),
         t=det.get("tomo"),
@@ -199,7 +236,17 @@ def persist_and_analyze(*, data: bytes, filename: str, content_type: str, ext: s
     if analyze:
         ocr = analyze_image(data, content_type or "")
         tipo = ocr.get("tipo")
-        personas_det = [p for p in ocr.get("personas", []) if p.get("dni")]  # necesitamos DNI para linkear
+        # Necesitamos DNI o (tomo+folio) para poder matchear/crear una persona.
+        # Las credenciales muchas veces no muestran DNI pero sí muestran tomo+folio.
+        personas_det = [
+            p for p in ocr.get("personas", [])
+            if p.get("dni") or (p.get("tomo") and p.get("folio"))
+        ]
+        # Aplicar default de jurisdiccion (via CLI --jurisdiccion) para las que no la traen
+        if DEFAULT_JURISDICCION:
+            for p in personas_det:
+                if not p.get("jurisdiccion"):
+                    p["jurisdiccion"] = DEFAULT_JURISDICCION
 
     # Determinar match_status agregado
     if not analyze:
@@ -334,21 +381,37 @@ def process_file(path: Path, *, analyze: bool, dry_run: bool, force: bool = Fals
 
 
 def main():
+    global DEFAULT_JURISDICCION
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--no-analyze", action="store_true")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--only")
     ap.add_argument("--force", action="store_true")
+    ap.add_argument("--folder", help="path a la carpeta a procesar (default: WhatsApp Chat)")
+    ap.add_argument("--jurisdiccion",
+                    help="jurisdiccion default para personas detectadas sin jurisdiccion en la planilla. "
+                         "No pisa la existente en la DB ni la que la vision detecte explicitamente.")
     args = ap.parse_args()
 
-    files = sorted(FOLDER.iterdir())
+    folder = Path(args.folder) if args.folder else FOLDER_DEFAULT
+    if not folder.exists() or not folder.is_dir():
+        print(f"ERROR: la carpeta '{folder}' no existe o no es un directorio.")
+        return
+
+    if args.jurisdiccion:
+        DEFAULT_JURISDICCION = args.jurisdiccion.strip()
+
+    files = sorted(folder.iterdir())
     if args.only:
         files = [f for f in files if args.only.lower() in f.name.lower()]
     if args.limit:
         files = files[: args.limit]
 
+    print(f"Carpeta: {folder}")
     print(f"Archivos: {len(files)}  Analyze={not args.no_analyze}  Force={args.force}")
+    if DEFAULT_JURISDICCION:
+        print(f"Jurisdiccion default para nuevas: {DEFAULT_JURISDICCION!r}")
     print("-" * 72)
 
     totals: dict = {}

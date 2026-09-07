@@ -427,13 +427,40 @@ def fotos_revisar():
 # ─────────── Upload ───────────
 
 def _find_or_create_persona(det: dict) -> tuple[int, bool, list[str]]:
+    """
+    Match: prioridad DNI. Si no hay DNI pero hay tomo+folio (típico de credenciales
+    de matrícula), busca por tomo+folio; si además hay jurisdicción, la usa como
+    desempate para evitar colisiones entre jurisdicciones.
+    """
     dni = det.get("dni")
-    if not dni:
-        raise ValueError("DNI requerido para vincular")
-    existing = q_one(f"""
-        SELECT id, nombre_apellido, genero, matricula, tomo, folio, jurisdiccion
-        FROM {SCHEMA}.personas WHERE dni = :d
-    """, d=dni)
+    tomo = det.get("tomo")
+    folio = det.get("folio")
+
+    if not dni and not (tomo and folio):
+        raise ValueError("DNI o tomo+folio requerido para vincular")
+
+    if dni:
+        existing = q_one(f"""
+            SELECT id, nombre_apellido, dni, genero, matricula, tomo, folio, jurisdiccion
+            FROM {SCHEMA}.personas WHERE dni = :d
+        """, d=dni)
+    else:
+        jur = det.get("jurisdiccion")
+        if jur:
+            existing = q_one(f"""
+                SELECT id, nombre_apellido, dni, genero, matricula, tomo, folio, jurisdiccion
+                FROM {SCHEMA}.personas
+                WHERE tomo = :t AND folio = :f AND jurisdiccion = :j
+                LIMIT 1
+            """, t=tomo, f=folio, j=jur)
+        else:
+            existing = q_one(f"""
+                SELECT id, nombre_apellido, dni, genero, matricula, tomo, folio, jurisdiccion
+                FROM {SCHEMA}.personas
+                WHERE tomo = :t AND folio = :f
+                LIMIT 1
+            """, t=tomo, f=folio)
+
     if existing:
         updates = {}
         for k in ENRIQUECIBLES:
@@ -445,13 +472,17 @@ def _find_or_create_persona(det: dict) -> tuple[int, bool, list[str]]:
                      id=existing["id"], **updates)
         return existing["id"], False, list(updates.keys())
 
+    fallback_nombre = (
+        det.get("nombre_apellido")
+        or (f"(pendiente) DNI {dni}" if dni else f"(pendiente) T{tomo} F{folio}")
+    )
     new_p = q_one_write(f"""
         INSERT INTO {SCHEMA}.personas
           (nombre_apellido, dni, genero, matricula, tomo, folio, jurisdiccion, observaciones)
         VALUES (:n, :d, :g, :m, :t, :f, :j, 'Creada automáticamente desde visión')
         RETURNING id
     """,
-        n=det.get("nombre_apellido") or f"(pendiente) DNI {dni}",
+        n=fallback_nombre,
         d=dni, g=det.get("genero"),
         m=det.get("matricula"), t=det.get("tomo"), f=det.get("folio"),
         j=det.get("jurisdiccion"),
@@ -537,7 +568,11 @@ def _persist_upload(*, data: bytes, filename: str, content_type: str, ext: str,
     if analyze and not persona_id_hint:
         ocr = analyze_image(data, content_type or "")
         tipo = ocr.get("tipo")
-        personas_det = [p for p in ocr.get("personas", []) if p.get("dni")]
+        # Aceptamos personas con DNI o con tomo+folio (típico de credenciales sin DNI)
+        personas_det = [
+            p for p in ocr.get("personas", [])
+            if p.get("dni") or (p.get("tomo") and p.get("folio"))
+        ]
 
     if persona_id_hint:
         match_status = "manual"
