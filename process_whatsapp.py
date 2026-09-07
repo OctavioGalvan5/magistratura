@@ -18,10 +18,11 @@ Por cada persona detectada:
 Idempotencia: source_file_sha256 evita reprocesar el mismo archivo fuente.
 
 Uso:
-    python process_whatsapp.py                                  # procesa todo (carpeta WhatsApp default)
+    python process_whatsapp.py                                  # procesa todo (carpeta WhatsApp default, DB julia)
+    python process_whatsapp.py --db nacion                      # trabaja sobre la DB 'nacion'
+    python process_whatsapp.py --db nacion --folder "COLEGIO DE CORDOBA" --jurisdiccion Cordoba
     python process_whatsapp.py --folder "path/a/otra/carpeta"   # procesa otra carpeta
     python process_whatsapp.py --jurisdiccion "Cordoba"         # todas las nuevas personas → Cordoba
-    python process_whatsapp.py --folder "..." --jurisdiccion Cordoba
     python process_whatsapp.py --limit 5                        # solo los primeros N
     python process_whatsapp.py --no-analyze                     # sube sin OCR
     python process_whatsapp.py --dry-run                        # lista sin hacer nada
@@ -53,6 +54,7 @@ from minio.error import S3Error
 import pypdfium2 as pdfium
 
 from vision import analyze_image  # nuevo API multi-persona
+from db_config import resolve_db_url, DB_CHOICES
 
 load_dotenv()
 
@@ -65,7 +67,9 @@ FOLDER_DEFAULT = Path(r"c:\Users\octav\Downloads\Consejo de la magistratura\What
 # ni pisa la que la visión sí detectó desde una planilla.
 DEFAULT_JURISDICCION: str | None = None
 
-engine = create_engine(os.environ["DB_CONNECTION_STRING"], pool_pre_ping=True)
+# engine se inicializa en main() según el flag --db para no crear conexión al importar.
+engine = None  # se inicializa en main() con la URL segun --db
+
 minio = Minio(
     os.environ["MINIO_ENDPOINT"],
     access_key=os.environ["MINIO_ACCESS_KEY"],
@@ -381,7 +385,7 @@ def process_file(path: Path, *, analyze: bool, dry_run: bool, force: bool = Fals
 
 
 def main():
-    global DEFAULT_JURISDICCION
+    global DEFAULT_JURISDICCION, engine
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--no-analyze", action="store_true")
@@ -392,7 +396,11 @@ def main():
     ap.add_argument("--jurisdiccion",
                     help="jurisdiccion default para personas detectadas sin jurisdiccion en la planilla. "
                          "No pisa la existente en la DB ni la que la vision detecte explicitamente.")
+    ap.add_argument("--db", default="julia", choices=DB_CHOICES,
+                    help="Workspace / database a usar (default: julia)")
     args = ap.parse_args()
+
+    engine = create_engine(resolve_db_url(args.db), pool_pre_ping=True)
 
     folder = Path(args.folder) if args.folder else FOLDER_DEFAULT
     if not folder.exists() or not folder.is_dir():
@@ -408,7 +416,7 @@ def main():
     if args.limit:
         files = files[: args.limit]
 
-    print(f"Carpeta: {folder}")
+    print(f"DB: {args.db!r}  Carpeta: {folder}")
     print(f"Archivos: {len(files)}  Analyze={not args.no_analyze}  Force={args.force}")
     if DEFAULT_JURISDICCION:
         print(f"Jurisdiccion default para nuevas: {DEFAULT_JURISDICCION!r}")

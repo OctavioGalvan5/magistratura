@@ -48,8 +48,10 @@ from minio import Minio
 from PIL import Image
 from fpdf import FPDF
 
+from db_config import resolve_db_url, DB_CHOICES
+
 load_dotenv()
-engine = create_engine(os.environ["DB_CONNECTION_STRING"], pool_pre_ping=True)
+engine = None  # se inicializa en main() segun --db
 minio = Minio(
     os.environ["MINIO_ENDPOINT"],
     access_key=os.environ["MINIO_ACCESS_KEY"],
@@ -366,15 +368,20 @@ def upload_pdf(data: bytes, object_key: str) -> str:
 # ─── Main ──────────────────────────────────────────────────────
 
 def main():
+    global engine
     ap = argparse.ArgumentParser()
     ap.add_argument("--jur", help="solo una jurisdiccion")
     ap.add_argument("--tipo", choices=TIPOS_VALIDOS,
                     help="solo una variante (default: las 3)")
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--db", default="julia", choices=DB_CHOICES,
+                    help="workspace/database (default: julia)")
     args = ap.parse_args()
 
+    engine = create_engine(resolve_db_url(args.db), pool_pre_ping=True)
+
     fecha = datetime.now().strftime("%Y%m%d")
-    prefix = f"entregables/{fecha}"
+    prefix = f"entregables/{fecha}/{args.db}" if args.db != "julia" else f"entregables/{fecha}"
     tipos = [args.tipo] if args.tipo else list(TIPOS_VALIDOS)
 
     grupos = cargar_personas(args.jur)
@@ -384,7 +391,7 @@ def main():
 
     print(f"Jurisdicciones a procesar: {len(grupos)}")
     print(f"Variantes: {', '.join(tipos)}")
-    print(f"Prefix MinIO: {prefix}")
+    print(f"DB: {args.db!r}  Prefix MinIO: {prefix}")
     print("=" * 72)
 
     resultados = []
