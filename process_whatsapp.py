@@ -136,13 +136,23 @@ def source_already_processed(source_sha: str) -> bool:
 
 # ─── Match & Enrich ───
 
-def _find_or_create_persona(det: dict) -> tuple[int, bool, list[str]]:
+def _find_or_create_persona(det: dict, default_jur: str | None = None) -> tuple[int, bool, list[str]]:
     """
-    Recibe un dict con datos detectados (dni, nombre_apellido, genero, tomo, folio,
-    matricula, jurisdiccion). Devuelve (persona_id, creada, campos_enriquecidos).
+    Recibe un dict con datos detectados por visión (dni, nombre_apellido, genero,
+    tomo, folio, matricula, jurisdiccion). Devuelve (persona_id, creada, campos_enriquecidos).
 
     Match: prioridad DNI. Si no hay DNI pero hay tomo+folio (típico de credenciales
     de matrícula que no muestran DNI), busca por tomo+folio como fallback.
+
+    default_jur: nombre-de-carpeta a usar SOLO como fallback cuando la visión NO detectó
+    jurisdicción (típicamente en DNIs/credenciales que no muestran esa info). NO pisa
+    una jurisdicción ya cargada en la persona.
+
+    Prioridad para jurisdiccion en enrichment de persona existente:
+      1. det.jurisdiccion (real, viene de una planilla) → OVERRIDE aunque exista otra
+         (así el DNI procesado primero con fallback se corrige cuando llega la planilla)
+      2. det sin jurisdicción, existing vacia, default_jur presente → fill con default_jur
+      3. det sin jurisdicción, existing con valor → no toca
     """
     dni = det.get("dni")
     tomo = det.get("tomo")
@@ -159,14 +169,14 @@ def _find_or_create_persona(det: dict) -> tuple[int, bool, list[str]]:
     else:
         # Fallback por matrícula (tomo + folio). Puede ser ambiguo entre jurisdicciones,
         # así que si el det trae jurisdicción la usamos como desempate.
-        jur = det.get("jurisdiccion")
-        if jur:
+        jur_para_match = det.get("jurisdiccion") or default_jur
+        if jur_para_match:
             existing = q_one(f"""
                 SELECT id, nombre_apellido, dni, genero, matricula, tomo, folio, jurisdiccion
                 FROM {SCHEMA}.personas
                 WHERE tomo = :t AND folio = :f AND jurisdiccion = :j
                 LIMIT 1
-            """, t=tomo, f=folio, j=jur)
+            """, t=tomo, f=folio, j=jur_para_match)
         else:
             existing = q_one(f"""
                 SELECT id, nombre_apellido, dni, genero, matricula, tomo, folio, jurisdiccion
@@ -176,11 +186,19 @@ def _find_or_create_persona(det: dict) -> tuple[int, bool, list[str]]:
             """, t=tomo, f=folio)
 
     if existing:
-        # Enriquecer campos vacíos
         updates = {}
         for k in ENRIQUECIBLES:
             actual = existing[k]
             nuevo = det.get(k)
+            if k == "jurisdiccion":
+                # 1) det trae jurisdiccion real (de una planilla): override si difiere
+                if nuevo and nuevo != actual:
+                    updates[k] = nuevo
+                # 2) det NO trae, existing vacia, hay default_jur (folder fallback)
+                elif not nuevo and not actual and default_jur:
+                    updates[k] = default_jur
+                continue
+            # Otros campos: solo fill si esta vacio (comportamiento clásico)
             if nuevo and not actual:
                 updates[k] = nuevo
         if updates:
@@ -189,7 +207,8 @@ def _find_or_create_persona(det: dict) -> tuple[int, bool, list[str]]:
             exec_sql(f"UPDATE {SCHEMA}.personas SET {set_clause} WHERE id = :id", **params)
         return existing["id"], False, list(updates.keys())
 
-    # Crear persona nueva
+    # Crear persona nueva. Prioridad jurisdiccion: det → default_jur → None.
+    jur_a_insertar = det.get("jurisdiccion") or default_jur
     fallback_nombre = (
         det.get("nombre_apellido")
         or (f"(pendiente) DNI {dni}" if dni else f"(pendiente) T{tomo} F{folio}")
@@ -201,15 +220,15 @@ def _find_or_create_persona(det: dict) -> tuple[int, bool, list[str]]:
         RETURNING id
     """,
         n=fallback_nombre,
-        d=dni,  # puede ser None si vino de una credencial sin DNI legible
+        d=dni,
         g=det.get("genero"),
         m=det.get("matricula"),
         t=det.get("tomo"),
         f=det.get("folio"),
-        j=det.get("jurisdiccion"),
+        j=jur_a_insertar,
         obs="Creada automáticamente desde visión",
     )
-    return new_p["id"], True, list(ENRIQUECIBLES)  # todos los campos "creados"
+    return new_p["id"], True, list(ENRIQUECIBLES)
 
 
 def _link_foto_persona(foto_id: int, persona_id: int, det: dict, creada: bool, campos: list[str]):
@@ -248,11 +267,9 @@ def persist_and_analyze(*, data: bytes, filename: str, content_type: str, ext: s
             p for p in ocr.get("personas", [])
             if p.get("dni") or (p.get("tomo") and p.get("folio"))
         ]
-        # Aplicar default de jurisdiccion (via CLI --jurisdiccion) para las que no la traen
-        if DEFAULT_JURISDICCION:
-            for p in personas_det:
-                if not p.get("jurisdiccion"):
-                    p["jurisdiccion"] = DEFAULT_JURISDICCION
+        # NO inyectamos DEFAULT_JURISDICCION en el det. Se pasa aparte a
+        # _find_or_create_persona para que la jurisdiccion detectada por vision
+        # tenga prioridad sobre el fallback de nombre-de-carpeta.
 
     # Determinar match_status agregado
     if not analyze:
@@ -282,7 +299,7 @@ def persist_and_analyze(*, data: bytes, filename: str, content_type: str, ext: s
     linked = []
     for det in personas_det:
         try:
-            pid, creada, campos = _find_or_create_persona(det)
+            pid, creada, campos = _find_or_create_persona(det, default_jur=DEFAULT_JURISDICCION)
             _link_foto_persona(foto_id, pid, det, creada, campos)
             if creada: creadas += 1
             elif campos: enriquecidas += 1
@@ -407,16 +424,17 @@ def process_file(path: Path, *, analyze: bool, dry_run: bool, force: bool = Fals
                     p for p in doc.get("personas", [])
                     if p.get("dni") or (p.get("tomo") and p.get("folio"))
                 ]
-                if DEFAULT_JURISDICCION:
-                    for p in personas_det:
-                        if not p.get("jurisdiccion"):
-                            p["jurisdiccion"] = DEFAULT_JURISDICCION
+                # NO inyectamos DEFAULT_JURISDICCION en el det. Se pasa a
+                # _find_or_create_persona como default_jur para que la jurisdiccion
+                # detectada por vision (real) tenga prioridad sobre el fallback.
 
                 # Resolver/crear personas del documento (una sola vez)
                 persona_records: list = []
                 for det in personas_det:
                     try:
-                        pid, creada, campos = _find_or_create_persona(det)
+                        pid, creada, campos = _find_or_create_persona(
+                            det, default_jur=DEFAULT_JURISDICCION
+                        )
                         persona_records.append((pid, det, creada, campos))
                         if creada:  stats["creadas"] += 1
                         elif campos: stats["enriquecidas"] += 1

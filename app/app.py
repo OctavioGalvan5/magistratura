@@ -473,11 +473,19 @@ def fotos_revisar():
 
 # ─────────── Upload ───────────
 
-def _find_or_create_persona(det: dict) -> tuple[int, bool, list[str]]:
+def _find_or_create_persona(det: dict, default_jur: str | None = None) -> tuple[int, bool, list[str]]:
     """
     Match: prioridad DNI. Si no hay DNI pero hay tomo+folio (típico de credenciales
     de matrícula), busca por tomo+folio; si además hay jurisdicción, la usa como
-    desempate para evitar colisiones entre jurisdicciones.
+    desempate.
+
+    default_jur: fallback (típicamente nombre-de-carpeta) para jurisdicción cuando la
+    visión NO la detecta. No pisa una jurisdicción real ya cargada.
+
+    Prioridad para jurisdiccion al enriquecer persona existente:
+      1. det.jurisdiccion (real, detectada por vision en una planilla) → override
+      2. det sin jurisdiccion + existing vacia + default_jur → fill con default_jur
+      3. det sin jurisdiccion + existing con valor → no toca
     """
     dni = det.get("dni")
     tomo = det.get("tomo")
@@ -492,14 +500,14 @@ def _find_or_create_persona(det: dict) -> tuple[int, bool, list[str]]:
             FROM {SCHEMA}.personas WHERE dni = :d
         """, d=dni)
     else:
-        jur = det.get("jurisdiccion")
-        if jur:
+        jur_para_match = det.get("jurisdiccion") or default_jur
+        if jur_para_match:
             existing = q_one(f"""
                 SELECT id, nombre_apellido, dni, genero, matricula, tomo, folio, jurisdiccion
                 FROM {SCHEMA}.personas
                 WHERE tomo = :t AND folio = :f AND jurisdiccion = :j
                 LIMIT 1
-            """, t=tomo, f=folio, j=jur)
+            """, t=tomo, f=folio, j=jur_para_match)
         else:
             existing = q_one(f"""
                 SELECT id, nombre_apellido, dni, genero, matricula, tomo, folio, jurisdiccion
@@ -511,14 +519,23 @@ def _find_or_create_persona(det: dict) -> tuple[int, bool, list[str]]:
     if existing:
         updates = {}
         for k in ENRIQUECIBLES:
-            if det.get(k) and not existing[k]:
-                updates[k] = det[k]
+            actual = existing[k]
+            nuevo = det.get(k)
+            if k == "jurisdiccion":
+                if nuevo and nuevo != actual:
+                    updates[k] = nuevo  # real de planilla → override
+                elif not nuevo and not actual and default_jur:
+                    updates[k] = default_jur  # fallback folder → solo si esta vacio
+                continue
+            if nuevo and not actual:
+                updates[k] = nuevo
         if updates:
             set_clause = ", ".join(f"{k} = :{k}" for k in updates)
             exec_sql(f"UPDATE {SCHEMA}.personas SET {set_clause} WHERE id = :id",
                      id=existing["id"], **updates)
         return existing["id"], False, list(updates.keys())
 
+    jur_a_insertar = det.get("jurisdiccion") or default_jur
     fallback_nombre = (
         det.get("nombre_apellido")
         or (f"(pendiente) DNI {dni}" if dni else f"(pendiente) T{tomo} F{folio}")
@@ -532,7 +549,7 @@ def _find_or_create_persona(det: dict) -> tuple[int, bool, list[str]]:
         n=fallback_nombre,
         d=dni, g=det.get("genero"),
         m=det.get("matricula"), t=det.get("tomo"), f=det.get("folio"),
-        j=det.get("jurisdiccion"),
+        j=jur_a_insertar,
     )
     return new_p["id"], True, list(ENRIQUECIBLES)
 
