@@ -53,7 +53,7 @@ from minio import Minio
 from minio.error import S3Error
 import pypdfium2 as pdfium
 
-from vision import analyze_image  # nuevo API multi-persona
+from vision import analyze_image, analyze_pages  # multi-persona + multi-pagina
 from db_config import resolve_db_url, DB_CHOICES
 
 load_dotenv()
@@ -368,14 +368,108 @@ def process_file(path: Path, *, analyze: bool, dry_run: bool, force: bool = Fals
     if ext in PDF_EXTS:
         upload_to_minio(data, ext, "application/pdf")  # guardar PDF original
         try:
-            for page_num, jpg_bytes in pdf_pages_as_jpg(data):
+            pages = list(pdf_pages_as_jpg(data))  # [(page_num, jpg), ...]
+            stats["paginas"] = len(pages)
+
+            if not analyze:
+                # Sin análisis: subir cada pagina como foto pendiente sin link
+                for page_num, jpg in pages:
+                    fname = f"{path.stem}__p{page_num}.jpg"
+                    r = persist_and_analyze(
+                        data=jpg, filename=fname, content_type="image/jpeg",
+                        ext=".jpg", analyze=False, source_file_sha256=source_sha,
+                    )
+                    _report(f"{tag} p{page_num}", r); _acc(r)
+                return stats
+
+            # ── Análisis multi-pagina: 1 sola llamada a la vision con TODAS las paginas ──
+            analysis = analyze_pages([jpg for _, jpg in pages])
+            documentos = analysis.get("documentos", [])
+            covered_pages: set[int] = set()
+
+            for doc in documentos:
+                tipo = doc.get("tipo") or "otro"
+                doc_pages = doc.get("paginas", [])
+                covered_pages.update(doc_pages)
+
+                personas_det = [
+                    p for p in doc.get("personas", [])
+                    if p.get("dni") or (p.get("tomo") and p.get("folio"))
+                ]
+                if DEFAULT_JURISDICCION:
+                    for p in personas_det:
+                        if not p.get("jurisdiccion"):
+                            p["jurisdiccion"] = DEFAULT_JURISDICCION
+
+                # Resolver/crear personas del documento (una sola vez)
+                persona_records: list = []
+                for det in personas_det:
+                    try:
+                        pid, creada, campos = _find_or_create_persona(det)
+                        persona_records.append((pid, det, creada, campos))
+                        if creada:  stats["creadas"] += 1
+                        elif campos: stats["enriquecidas"] += 1
+                    except Exception as e:
+                        print(f"    error persona {det.get('dni') or det.get('tomo')}: {e}")
+
+                match_status = "matched" if persona_records else "sin_match"
+                if persona_records: stats["matched"] += len(doc_pages)
+                else:               stats["sin_match"] += len(doc_pages)
+
+                # Subir cada pagina del documento y linkearla a TODAS las personas del doc
+                for page_num in doc_pages:
+                    jpg = next((j for pn, j in pages if pn == page_num), None)
+                    if jpg is None: continue
+                    fname = f"{path.stem}__p{page_num}.jpg"
+                    obj_key, page_sha = upload_to_minio(jpg, ".jpg", "image/jpeg")
+
+                    existing = q_one(f"SELECT id FROM {SCHEMA}.fotos WHERE minio_object_key=:k", k=obj_key)
+                    if existing:
+                        foto_id = existing["id"]
+                        exec_sql(f"""
+                            UPDATE {SCHEMA}.fotos SET tipo=:tp, match_status=:ms,
+                              raw_ocr = CAST(:raw AS JSONB), processed_at = now(),
+                              source_file_sha256 = COALESCE(source_file_sha256, :src)
+                            WHERE id = :id
+                        """, id=foto_id, tp=tipo, ms=match_status,
+                             raw=json.dumps(doc, ensure_ascii=False), src=source_sha)
+                    else:
+                        foto = q_one_write(f"""
+                            INSERT INTO {SCHEMA}.fotos
+                              (filename_original, minio_bucket, minio_object_key, content_type,
+                               size_bytes, sha256, source_file_sha256, tipo, match_status,
+                               raw_ocr, processed_at)
+                            VALUES
+                              (:fn, :bk, :ok, :ct, :sz, :sh, :src, :tp, :ms,
+                               CAST(:raw AS JSONB), now())
+                            RETURNING id
+                        """, fn=fname, bk=BUCKET, ok=obj_key, ct="image/jpeg",
+                             sz=len(jpg), sh=page_sha, src=source_sha, tp=tipo, ms=match_status,
+                             raw=json.dumps(doc, ensure_ascii=False))
+                        foto_id = foto["id"]
+
+                    for pid, det, creada, campos in persona_records:
+                        _link_foto_persona(foto_id, pid, det, creada, campos)
+
+                # Reportar
+                header = f"  {tag} p{doc_pages} → [{tipo}] {match_status}"
+                if persona_records:
+                    names = ", ".join(det.get("nombre_apellido") or f"DNI {det.get('dni') or '?'}"
+                                       for _, det, _, _ in persona_records)
+                    print(f"{header} · {len(persona_records)} persona(s): {names}")
+                else:
+                    print(header)
+
+            # Paginas que la vision no clasifico como documento: subirlas sin analisis
+            for page_num, jpg in pages:
+                if page_num in covered_pages: continue
                 fname = f"{path.stem}__p{page_num}.jpg"
                 r = persist_and_analyze(
-                    data=jpg_bytes, filename=fname, content_type="image/jpeg",
-                    ext=".jpg", analyze=analyze, source_file_sha256=source_sha,
+                    data=jpg, filename=fname, content_type="image/jpeg",
+                    ext=".jpg", analyze=False, source_file_sha256=source_sha,
                 )
-                _report(f"{tag} p{page_num}", r); _acc(r)
-                stats["paginas"] += 1
+                _report(f"{tag} p{page_num} (no clasificada)", r); _acc(r)
+
         except Exception as e:
             print(f"{tag} ERROR PDF: {e}")
         return stats

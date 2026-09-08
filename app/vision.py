@@ -44,6 +44,83 @@ log = logging.getLogger(__name__)
 ANTHROPIC_MODEL = "claude-opus-4-7"
 OPENAI_MODEL = "gpt-4o-mini"
 
+PROMPT_MULTIPAGINA = (
+    "Sos un extractor de datos para un padrón de abogados. Te paso VARIAS páginas "
+    "consecutivas de un mismo PDF (aval, planilla, DNIs, credenciales, mezclados). "
+    "Tu tarea: identificar TODOS los DOCUMENTOS presentes y las personas que aparecen "
+    "en cada uno, aprovechando el contexto entre páginas.\n\n"
+    "Tipos de documento:\n"
+    "  - 'dni'            → una página con anverso/reverso de un DNI argentino.\n"
+    "  - 'credencial'     → una página con la credencial/carnet de matrícula profesional.\n"
+    "                       Puede ocupar 1 página (frente+dorso en la misma) o 2 páginas\n"
+    "                       consecutivas (frente en una, dorso en la siguiente).\n"
+    "  - 'planilla_aval'  → una página con TABLA de firmantes (nombre, DNI, matrícula, jur).\n"
+    "  - 'otro'           → cualquier otra cosa.\n\n"
+    "IMPORTANTE — combinar frente + dorso de credenciales:\n"
+    "  Si en la página N ves una credencial con FOTO + NOMBRE pero sin tomo/folio\n"
+    "  visibles, y en la página N+1 ves los datos de matrícula (Tomo, Folio, jur.)\n"
+    "  sin nombre, ASUMÍ que son frente y dorso de la MISMA credencial de la misma\n"
+    "  persona y devolvé UN solo documento con paginas=[N, N+1].\n\n"
+    "Devolvé una lista 'documentos'. Cada documento con:\n"
+    "  - tipo\n"
+    "  - paginas: array de números de página 1-indexed donde aparece (ej: [1] o [3,4])\n"
+    "  - personas: lista de personas detectadas en el documento con:\n"
+    "      dni, nombre_apellido, genero (M/F/X), tomo, folio, matricula, jurisdiccion,\n"
+    "      fecha_nacimiento (YYYY-MM-DD).\n"
+    "  - notas: texto opcional con cualquier ambigüedad relevante.\n\n"
+    "Reglas:\n"
+    "  - 'dni' solo dígitos, sin puntos ni espacios.\n"
+    "  - 'genero' exactamente 'M', 'F' o 'X'.\n"
+    "  - Si un campo no es legible, devolvé null (no adivines).\n"
+    "  - Para un DNI: 1 documento con 1 persona.\n"
+    "  - Para una credencial: 1 documento con 1 persona, paginas=[N] o [N, N+1].\n"
+    "  - Para una planilla: 1 documento con N personas (una por fila).\n"
+    "  - Ignorá páginas obviamente basura (chats, stickers, blancos) o marcalas como 'otro'."
+)
+
+# Schema multi-página: lista de documentos, cada uno con páginas y personas
+SCHEMA_MULTI = {
+    "type": "object",
+    "properties": {
+        "documentos": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "tipo": {"type": "string",
+                             "enum": ["dni", "planilla_aval", "credencial", "otro"]},
+                    "paginas": {"type": "array", "items": {"type": "integer"}},
+                    "personas": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "dni":              {"type": ["string", "null"]},
+                                "nombre_apellido":  {"type": ["string", "null"]},
+                                "genero":           {"type": ["string", "null"]},
+                                "tomo":             {"type": ["integer", "null"]},
+                                "folio":            {"type": ["integer", "null"]},
+                                "matricula":        {"type": ["string", "null"]},
+                                "jurisdiccion":     {"type": ["string", "null"]},
+                                "fecha_nacimiento": {"type": ["string", "null"]},
+                            },
+                            "required": ["dni", "nombre_apellido", "genero", "tomo", "folio",
+                                         "matricula", "jurisdiccion", "fecha_nacimiento"],
+                            "additionalProperties": False,
+                        },
+                    },
+                    "notas": {"type": ["string", "null"]},
+                },
+                "required": ["tipo", "paginas", "personas", "notas"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["documentos"],
+    "additionalProperties": False,
+}
+
+
 PROMPT = (
     "Sos un extractor de datos para un padrón de abogados. "
     "Analizá la imagen y clasificala en UNO de estos tipos:\n"
@@ -242,3 +319,125 @@ def analyze_image(image_bytes: bytes, media_type: str) -> dict:
 # Backward-compat alias
 def analyze_dni(image_bytes: bytes, media_type: str) -> dict:
     return analyze_image(image_bytes, media_type)
+
+
+# ─── Multi-página ────────────────────────────────────────────
+
+def _normalize_documento(d: dict) -> dict:
+    if "personas" not in d or d["personas"] is None:
+        d["personas"] = []
+    d["personas"] = [_normalize_persona(p) for p in d["personas"]]
+    d["personas"] = [p for p in d["personas"] if p.get("dni") or (p.get("tomo") and p.get("folio")) or p.get("nombre_apellido")]
+    if "paginas" not in d or not d["paginas"]:
+        d["paginas"] = []
+    return d
+
+
+def _analyze_multi_anthropic(pages: list[bytes]) -> Optional[dict]:
+    """pages: lista de bytes JPEG (una por página). Devuelve dict {documentos: [...]}."""
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key or not pages:
+        return None
+    client = anthropic.Anthropic(api_key=api_key)
+    content = []
+    for i, page_bytes in enumerate(pages, 1):
+        img_bytes, media_type = _downscale_if_needed(page_bytes, "image/jpeg")
+        b64 = base64.standard_b64encode(img_bytes).decode("utf-8")
+        content.append({"type": "text", "text": f"--- Pagina {i} ---"})
+        content.append({
+            "type": "image",
+            "source": {"type": "base64", "media_type": media_type, "data": b64},
+        })
+    content.append({"type": "text", "text": PROMPT_MULTIPAGINA})
+
+    resp = client.messages.create(
+        model=ANTHROPIC_MODEL,
+        max_tokens=8192,
+        output_config={"format": {"type": "json_schema", "schema": SCHEMA_MULTI}},
+        messages=[{"role": "user", "content": content}],
+    )
+    text_out = next((b.text for b in resp.content if b.type == "text"), None)
+    if not text_out:
+        return None
+    data = json.loads(text_out)
+    data["_provider"] = f"anthropic:{ANTHROPIC_MODEL}"
+    docs = data.get("documentos", [])
+    data["documentos"] = [_normalize_documento(d) for d in docs]
+    return data
+
+
+def _analyze_multi_openai(pages: list[bytes]) -> Optional[dict]:
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key or not pages:
+        return None
+    client = OpenAI(api_key=api_key)
+    content: list = [{"type": "text", "text": PROMPT_MULTIPAGINA}]
+    for i, page_bytes in enumerate(pages, 1):
+        img_bytes, media_type = _downscale_if_needed(page_bytes, "image/jpeg")
+        b64 = base64.standard_b64encode(img_bytes).decode("utf-8")
+        content.append({"type": "text", "text": f"--- Pagina {i} ---"})
+        content.append({
+            "type": "image_url",
+            "image_url": {"url": f"data:{media_type};base64,{b64}"},
+        })
+    resp = client.chat.completions.create(
+        model=OPENAI_MODEL,
+        max_tokens=8192,
+        response_format={
+            "type": "json_schema",
+            "json_schema": {"name": "aval_multipagina", "strict": True, "schema": SCHEMA_MULTI},
+        },
+        messages=[{"role": "user", "content": content}],
+    )
+    text_out = resp.choices[0].message.content
+    if not text_out:
+        return None
+    data = json.loads(text_out)
+    data["_provider"] = f"openai:{OPENAI_MODEL}"
+    docs = data.get("documentos", [])
+    data["documentos"] = [_normalize_documento(d) for d in docs]
+    return data
+
+
+MAX_PAGES_PER_CALL = 20  # límite razonable para Anthropic multi-image
+
+
+def analyze_pages(pages: list[bytes]) -> dict:
+    """
+    Analiza N páginas de un PDF como un solo bloque. Devuelve {documentos: [...], _provider}.
+    Si son > MAX_PAGES_PER_CALL, chunkea y concatena.
+    En caso de error, devuelve {documentos: [], _provider: None, error: str}.
+    """
+    if not pages:
+        return {"documentos": [], "_provider": None, "notas": "sin paginas"}
+
+    if len(pages) <= MAX_PAGES_PER_CALL:
+        chunks = [(1, pages)]
+    else:
+        chunks = []
+        for start in range(0, len(pages), MAX_PAGES_PER_CALL):
+            chunks.append((start + 1, pages[start:start + MAX_PAGES_PER_CALL]))
+
+    all_docs: list = []
+    provider = None
+    for offset, chunk in chunks:
+        result = None
+        try:
+            result = _analyze_multi_anthropic(chunk)
+        except Exception as e:
+            log.warning("Anthropic multi falló, fallback OpenAI: %s", e)
+        if result is None:
+            try:
+                result = _analyze_multi_openai(chunk)
+            except Exception as e:
+                log.error("OpenAI multi también falló: %s", e)
+                continue
+        if result is None:
+            continue
+        provider = result.get("_provider", provider)
+        # Sumar offset a numeros de pagina para que sean absolutos en el PDF
+        for d in result.get("documentos", []):
+            d["paginas"] = [p + offset - 1 for p in d.get("paginas", [])]
+            all_docs.append(d)
+
+    return {"documentos": all_docs, "_provider": provider}

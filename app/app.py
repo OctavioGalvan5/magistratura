@@ -10,7 +10,7 @@ import pypdfium2 as pdfium
 from dotenv import load_dotenv
 from flask import (
     Flask, render_template, request, redirect, url_for, flash,
-    jsonify, abort,
+    jsonify, abort, session, g,
 )
 from markupsafe import Markup
 from sqlalchemy import create_engine, text
@@ -24,7 +24,20 @@ load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 SCHEMA = "avales_2026"
 BUCKET = "avales-eleccion-2026"
 
-engine = create_engine(os.environ["DB_CONNECTION_STRING"], pool_pre_ping=True)
+# ─── Multi-workspace: cada uno apunta a una DB distinta ───
+ENGINES: dict = {
+    "julia":  create_engine(os.environ["DB_CONNECTION_STRING"], pool_pre_ping=True),
+}
+if os.environ.get("DB_NACION_CONNECTION_STRING"):
+    ENGINES["nacion"] = create_engine(os.environ["DB_NACION_CONNECTION_STRING"], pool_pre_ping=True)
+
+WORKSPACES = list(ENGINES.keys())
+DEFAULT_WORKSPACE = "julia"
+
+WORKSPACE_LABELS = {
+    "julia":  "Julia",
+    "nacion": "Nación",
+}
 minio = Minio(
     os.environ["MINIO_ENDPOINT"],
     access_key=os.environ["MINIO_ACCESS_KEY"],
@@ -43,24 +56,58 @@ ENRIQUECIBLES = ("nombre_apellido", "genero", "matricula", "tomo", "folio", "jur
 
 # ─────────── Helpers ───────────
 
+def _engine():
+    """Engine del workspace activo (leido de la session Flask)."""
+    ws = session.get("workspace") if session else None
+    if ws not in ENGINES:
+        ws = DEFAULT_WORKSPACE
+    return ENGINES[ws]
+
+def _current_workspace() -> str:
+    ws = session.get("workspace") if session else None
+    return ws if ws in ENGINES else DEFAULT_WORKSPACE
+
 def q(sql, **params):
-    with engine.connect() as c:
+    with _engine().connect() as c:
         return c.execute(text(sql), params).mappings().all()
 
 def q_one(sql, **params):
-    with engine.connect() as c:
+    with _engine().connect() as c:
         return c.execute(text(sql), params).mappings().first()
 
 def q_one_write(sql, **params):
-    with engine.begin() as c:
+    with _engine().begin() as c:
         return c.execute(text(sql), params).mappings().first()
 
 def exec_sql(sql, **params):
-    with engine.begin() as c:
+    with _engine().begin() as c:
         return c.execute(text(sql), params)
 
 def presigned(object_key, expires_min=60):
     return minio.presigned_get_object(BUCKET, object_key, expires=timedelta(minutes=expires_min))
+
+
+# ─── Workspace switch ───
+
+@app.route("/workspace/<name>", methods=["POST", "GET"])
+def workspace_switch(name):
+    if name not in ENGINES:
+        flash(f"Workspace desconocido: {name}", "warning")
+    else:
+        session["workspace"] = name
+        flash(f"Workspace cambiado a: {WORKSPACE_LABELS.get(name, name)}", "success")
+    # Volver a home del listado para evitar IDs que no existen en el otro workspace.
+    return redirect(url_for("personas_list"))
+
+
+@app.context_processor
+def _inject_workspace():
+    """Expone workspace activo, opciones y label a todos los templates."""
+    return {
+        "workspace_current": _current_workspace(),
+        "workspace_options": WORKSPACES,
+        "workspace_labels":  WORKSPACE_LABELS,
+    }
 
 
 # ─────────── Rutas: Personas ───────────
@@ -195,7 +242,7 @@ def persona_nueva():
         dni_recibido = False
 
     try:
-        with engine.begin() as c:
+        with _engine().begin() as c:
             new_p = c.execute(text(f"""
                 INSERT INTO {SCHEMA}.personas
                   (nombre_apellido, dni, genero, matricula, tomo, folio,
