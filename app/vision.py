@@ -41,8 +41,26 @@ from PIL import Image
 
 log = logging.getLogger(__name__)
 
-ANTHROPIC_MODEL = "claude-opus-4-7"
-OPENAI_MODEL = "gpt-4o-mini"
+_MODEL_ALIASES = {
+    "opus":   "claude-opus-4-7",
+    "sonnet": "claude-sonnet-4-6",
+    "haiku":  "claude-haiku-4-5",
+}
+
+def _resolve_model(name: str | None, fallback: str) -> str:
+    if not name: return fallback
+    return _MODEL_ALIASES.get(name.lower().strip(), name)
+
+# Default: Sonnet 4.6 (~40% mas barato que Opus 4.7, calidad muy similar para OCR estructurado).
+# Se puede overridear con env VISION_MODEL=opus|sonnet|haiku (o el id completo).
+ANTHROPIC_MODEL = _resolve_model(os.environ.get("VISION_MODEL"), "claude-sonnet-4-6")
+OPENAI_MODEL = os.environ.get("OPENAI_VISION_MODEL", "gpt-4o-mini")
+
+
+def set_model(name: str) -> None:
+    """Cambia el modelo Anthropic en runtime (llamado por --model desde los scripts)."""
+    global ANTHROPIC_MODEL
+    ANTHROPIC_MODEL = _resolve_model(name, ANTHROPIC_MODEL)
 
 PROMPT_MULTIPAGINA = (
     "Sos un extractor de datos para un padrón de abogados. Te paso VARIAS páginas "
@@ -252,7 +270,7 @@ def _analyze_anthropic(image_bytes: bytes, media_type: str) -> Optional[dict]:
     resp = client.messages.create(
         model=ANTHROPIC_MODEL,
         max_tokens=4096,
-        output_config={"format": {"type": "json_schema", "schema": SCHEMA}},
+        output_config={"format": {"type": "json_schema", "schema": SCHEMA}, "effort": "low"},
         messages=[{
             "role": "user",
             "content": [
@@ -353,7 +371,7 @@ def _analyze_multi_anthropic(pages: list[bytes]) -> Optional[dict]:
     resp = client.messages.create(
         model=ANTHROPIC_MODEL,
         max_tokens=8192,
-        output_config={"format": {"type": "json_schema", "schema": SCHEMA_MULTI}},
+        output_config={"format": {"type": "json_schema", "schema": SCHEMA_MULTI}, "effort": "low"},
         messages=[{"role": "user", "content": content}],
     )
     text_out = next((b.text for b in resp.content if b.type == "text"), None)

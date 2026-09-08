@@ -53,7 +53,7 @@ from minio import Minio
 from minio.error import S3Error
 import pypdfium2 as pdfium
 
-from vision import analyze_image, analyze_pages  # multi-persona + multi-pagina
+from vision import analyze_image, analyze_pages, set_model as set_vision_model
 from db_config import resolve_db_url, DB_CHOICES
 
 load_dotenv()
@@ -492,7 +492,12 @@ def main():
                          "No pisa la existente en la DB ni la que la vision detecte explicitamente.")
     ap.add_argument("--db", default="julia", choices=DB_CHOICES,
                     help="Workspace / database a usar (default: julia)")
+    ap.add_argument("--model", help="modelo Anthropic de vision: opus | sonnet (default) | haiku "
+                                    "(o id completo tipo claude-opus-4-7)")
     args = ap.parse_args()
+
+    if args.model:
+        set_vision_model(args.model)
 
     engine = create_engine(resolve_db_url(args.db), pool_pre_ping=True)
 
@@ -504,13 +509,15 @@ def main():
     if args.jurisdiccion:
         DEFAULT_JURISDICCION = args.jurisdiccion.strip()
 
-    files = sorted(folder.iterdir())
+    # Recursivo: acepta carpetas anidadas (ej: "COLEGIO/COLEGIO/archivos...").
+    files = sorted(p for p in folder.rglob("*") if p.is_file())
     if args.only:
         files = [f for f in files if args.only.lower() in f.name.lower()]
     if args.limit:
         files = files[: args.limit]
 
-    print(f"DB: {args.db!r}  Carpeta: {folder}")
+    import vision as _v
+    print(f"DB: {args.db!r}  Modelo: {_v.ANTHROPIC_MODEL!r}  Carpeta: {folder}")
     print(f"Archivos: {len(files)}  Analyze={not args.no_analyze}  Force={args.force}")
     if DEFAULT_JURISDICCION:
         print(f"Jurisdiccion default para nuevas: {DEFAULT_JURISDICCION!r}")
