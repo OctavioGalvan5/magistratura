@@ -21,8 +21,10 @@ Uso:
     python process_whatsapp.py                                  # procesa todo (carpeta WhatsApp default, DB julia)
     python process_whatsapp.py --db nacion                      # trabaja sobre la DB 'nacion'
     python process_whatsapp.py --db nacion --folder "COLEGIO DE CORDOBA" --jurisdiccion Cordoba
+    python process_whatsapp.py --folder "Avales" --por-subcarpeta  # cada subcarpeta = jurisdiccion
     python process_whatsapp.py --folder "path/a/otra/carpeta"   # procesa otra carpeta
     python process_whatsapp.py --jurisdiccion "Cordoba"         # todas las nuevas personas → Cordoba
+    python process_whatsapp.py --model sonnet                   # opus | sonnet (default) | haiku
     python process_whatsapp.py --limit 5                        # solo los primeros N
     python process_whatsapp.py --no-analyze                     # sube sin OCR
     python process_whatsapp.py --dry-run                        # lista sin hacer nada
@@ -322,9 +324,18 @@ def _report(tag: str, r: dict):
                   f"{' '.join(flags)}")
 
 
-def process_file(path: Path, *, analyze: bool, dry_run: bool, force: bool = False) -> dict:
+def process_file(path: Path, *, analyze: bool, dry_run: bool, force: bool = False,
+                 root_folder: Path | None = None) -> dict:
+    """
+    root_folder: si se pasa, el filename_original que se guarda en la DB incluye
+    el path relativo desde ese root (ej: 'COLEGIO DE BELL VILLE/aval.pdf'). Sirve
+    para saber de que subcarpeta vino una foto que quedo sin match.
+    """
     ext = path.suffix.lower()
-    tag = f"[{path.name}]"
+    # Nombre a guardar en la DB: relativo al root, o solo el basename si no hay root.
+    rel_name = str(path.relative_to(root_folder)).replace("\\", "/") if root_folder else path.name
+    rel_stem = rel_name.rsplit(".", 1)[0] if "." in rel_name else rel_name
+    tag = f"[{rel_name}]"
 
     if ext in SKIP_EXTS:
         print(f"{tag} SKIP ({ext})")
@@ -354,13 +365,13 @@ def process_file(path: Path, *, analyze: bool, dry_run: bool, force: bool = Fals
 
     if ext in IMAGE_EXTS:
         ct = f"image/{'jpeg' if ext in ('.jpg', '.jpeg') else ext[1:]}"
-        r = persist_and_analyze(data=data, filename=path.name, content_type=ct, ext=ext,
+        r = persist_and_analyze(data=data, filename=rel_name, content_type=ct, ext=ext,
                                 analyze=analyze, source_file_sha256=source_sha)
         _report(tag, r); _acc(r)
         return stats
 
     if ext in PASSTHROUGH_EXTS:
-        r = persist_and_analyze(data=data, filename=path.name, content_type="image/heic",
+        r = persist_and_analyze(data=data, filename=rel_name, content_type="image/heic",
                                 ext=ext, analyze=False, source_file_sha256=source_sha)
         _report(tag + " (heic)", r); _acc(r)
         return stats
@@ -374,7 +385,7 @@ def process_file(path: Path, *, analyze: bool, dry_run: bool, force: bool = Fals
             if not analyze:
                 # Sin análisis: subir cada pagina como foto pendiente sin link
                 for page_num, jpg in pages:
-                    fname = f"{path.stem}__p{page_num}.jpg"
+                    fname = f"{rel_stem}__p{page_num}.jpg"
                     r = persist_and_analyze(
                         data=jpg, filename=fname, content_type="image/jpeg",
                         ext=".jpg", analyze=False, source_file_sha256=source_sha,
@@ -420,7 +431,7 @@ def process_file(path: Path, *, analyze: bool, dry_run: bool, force: bool = Fals
                 for page_num in doc_pages:
                     jpg = next((j for pn, j in pages if pn == page_num), None)
                     if jpg is None: continue
-                    fname = f"{path.stem}__p{page_num}.jpg"
+                    fname = f"{rel_stem}__p{page_num}.jpg"
                     obj_key, page_sha = upload_to_minio(jpg, ".jpg", "image/jpeg")
 
                     existing = q_one(f"SELECT id FROM {SCHEMA}.fotos WHERE minio_object_key=:k", k=obj_key)
@@ -463,7 +474,7 @@ def process_file(path: Path, *, analyze: bool, dry_run: bool, force: bool = Fals
             # Paginas que la vision no clasifico como documento: subirlas sin analisis
             for page_num, jpg in pages:
                 if page_num in covered_pages: continue
-                fname = f"{path.stem}__p{page_num}.jpg"
+                fname = f"{rel_stem}__p{page_num}.jpg"
                 r = persist_and_analyze(
                     data=jpg, filename=fname, content_type="image/jpeg",
                     ext=".jpg", analyze=False, source_file_sha256=source_sha,
@@ -494,6 +505,10 @@ def main():
                     help="Workspace / database a usar (default: julia)")
     ap.add_argument("--model", help="modelo Anthropic de vision: opus | sonnet (default) | haiku "
                                     "(o id completo tipo claude-opus-4-7)")
+    ap.add_argument("--por-subcarpeta", action="store_true",
+                    help="Procesa cada subcarpeta como batch separado con el nombre de la "
+                         "subcarpeta como jurisdiccion default. Los archivos en la raiz se "
+                         "procesan al final con la jurisdiccion global (--jurisdiccion).")
     args = ap.parse_args()
 
     if args.model:
@@ -506,43 +521,80 @@ def main():
         print(f"ERROR: la carpeta '{folder}' no existe o no es un directorio.")
         return
 
-    if args.jurisdiccion:
-        DEFAULT_JURISDICCION = args.jurisdiccion.strip()
-
-    # Recursivo: acepta carpetas anidadas (ej: "COLEGIO/COLEGIO/archivos...").
-    files = sorted(p for p in folder.rglob("*") if p.is_file())
-    if args.only:
-        files = [f for f in files if args.only.lower() in f.name.lower()]
-    if args.limit:
-        files = files[: args.limit]
+    global_jur = args.jurisdiccion.strip() if args.jurisdiccion else None
+    if global_jur:
+        DEFAULT_JURISDICCION = global_jur
 
     import vision as _v
     print(f"DB: {args.db!r}  Modelo: {_v.ANTHROPIC_MODEL!r}  Carpeta: {folder}")
-    print(f"Archivos: {len(files)}  Analyze={not args.no_analyze}  Force={args.force}")
-    if DEFAULT_JURISDICCION:
-        print(f"Jurisdiccion default para nuevas: {DEFAULT_JURISDICCION!r}")
-    print("-" * 72)
+    if global_jur:
+        print(f"Jurisdiccion default global: {global_jur!r}")
+    print(f"Modo: {'por-subcarpeta' if args.por_subcarpeta else 'plano'}")
+    print("=" * 72)
 
     totals: dict = {}
+    por_carpeta: dict = {}  # {carpeta: totals}
     t0 = time.time()
-    for i, f in enumerate(files, 1):
-        if not f.is_file(): continue
-        print(f"[{i}/{len(files)}] {f.name}")
-        try:
-            r = process_file(f, analyze=not args.no_analyze, dry_run=args.dry_run, force=args.force)
-            for k, v in r.items():
-                totals[k] = totals.get(k, 0) + v
-        except KeyboardInterrupt:
-            print("\nInterrumpido por usuario.")
-            break
-        except Exception as e:
-            print(f"  ERROR: {e}")
-            totals["errores"] = totals.get("errores", 0) + 1
 
-    print("-" * 72)
+    def _procesar_lista(files: list[Path], jur_batch: str | None, label: str):
+        """Procesa una lista de archivos con la jurisdiccion dada. Acumula totales."""
+        global DEFAULT_JURISDICCION
+        DEFAULT_JURISDICCION = jur_batch or global_jur
+        batch_totals: dict = {}
+        if args.only:
+            files = [f for f in files if args.only.lower() in f.name.lower()]
+        if args.limit:
+            files = files[: args.limit]
+        print(f"\n### {label} ({len(files)} archivos) — jurisdiccion default: "
+              f"{DEFAULT_JURISDICCION!r} ###")
+        for i, f in enumerate(files, 1):
+            if not f.is_file(): continue
+            rel = str(f.relative_to(folder)).replace("\\", "/")
+            print(f"[{i}/{len(files)}] {rel}")
+            try:
+                r = process_file(f, analyze=not args.no_analyze, dry_run=args.dry_run,
+                                 force=args.force, root_folder=folder)
+                for k, v in r.items():
+                    totals[k] = totals.get(k, 0) + v
+                    batch_totals[k] = batch_totals.get(k, 0) + v
+            except KeyboardInterrupt:
+                print("\nInterrumpido por usuario.")
+                raise
+            except Exception as e:
+                print(f"  ERROR: {e}")
+                totals["errores"] = totals.get("errores", 0) + 1
+        por_carpeta[label] = batch_totals
+
+    try:
+        if args.por_subcarpeta:
+            # Batch por cada subcarpeta con nombre-carpeta como jurisdiccion.
+            subfolders = sorted(p for p in folder.iterdir() if p.is_dir())
+            for sub in subfolders:
+                jur = sub.name
+                sub_files = sorted(p for p in sub.rglob("*") if p.is_file())
+                _procesar_lista(sub_files, jur_batch=jur, label=sub.name)
+            # Archivos sueltos en la raiz (si los hay).
+            root_files = sorted(p for p in folder.iterdir() if p.is_file())
+            if root_files:
+                _procesar_lista(root_files, jur_batch=global_jur,
+                                label="(raiz de la carpeta)")
+        else:
+            # Modo plano: todo recursivo con jurisdiccion global.
+            all_files = sorted(p for p in folder.rglob("*") if p.is_file())
+            _procesar_lista(all_files, jur_batch=global_jur, label=str(folder.name or "root"))
+    except KeyboardInterrupt:
+        pass
+
+    print("\n" + "=" * 72)
     print(f"Terminado en {time.time()-t0:.1f}s")
+    print("\nTotales globales:")
     for k, v in sorted(totals.items()):
         print(f"  {k}: {v}")
+    if len(por_carpeta) > 1:
+        print("\nPor carpeta:")
+        for cp, st in por_carpeta.items():
+            resumen = ", ".join(f"{k}={v}" for k, v in sorted(st.items()) if v)
+            print(f"  [{cp}] {resumen or '(nada)'}")
 
 
 if __name__ == "__main__":
