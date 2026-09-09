@@ -10,7 +10,7 @@ import pypdfium2 as pdfium
 from dotenv import load_dotenv
 from flask import (
     Flask, render_template, request, redirect, url_for, flash,
-    jsonify, abort, session, g,
+    jsonify, abort, session, g, Response, stream_with_context,
 )
 from markupsafe import Markup
 from sqlalchemy import create_engine, text
@@ -1116,6 +1116,32 @@ def planillas_list():
 
 # ─────────── Entregables (PDFs por jurisdicción) ───────────
 
+@app.route("/entregables/dl/<path:object_key>")
+def entregables_download(object_key):
+    """Proxy de descarga: baja el objeto de MinIO y lo sirve por HTTPS con
+    Content-Disposition: attachment. Evita el bloqueo por Mixed Content
+    cuando la app corre en HTTPS y MinIO en HTTP."""
+    if not object_key.startswith("entregables/") or ".." in object_key:
+        abort(404)
+    filename = request.args.get("filename") or object_key.rsplit("/", 1)[-1]
+    filename = filename.replace('"', "").replace("\n", "")
+    try:
+        resp = minio.get_object(BUCKET, object_key)
+    except Exception:
+        abort(404)
+    def generate():
+        try:
+            for chunk in resp.stream(64 * 1024):
+                yield chunk
+        finally:
+            resp.close(); resp.release_conn()
+    headers = {
+        "Content-Type": "application/pdf",
+        "Content-Disposition": f'attachment; filename="{filename}"',
+    }
+    return Response(stream_with_context(generate()), headers=headers)
+
+
 @app.route("/entregables")
 def entregables_list():
     """Lista todos los PDFs subidos bajo entregables/ en MinIO."""
@@ -1163,7 +1189,7 @@ def entregables_list():
             "kb": (obj.size or 0) // 1024,
             "object_key": name,
             "url": presigned(name, expires_min=60 * 24),
-            "download_url": presigned_download(name, filename=display_fname, expires_min=60 * 24),
+            "download_url": url_for("entregables_download", object_key=name, filename=display_fname),
             "last_modified": obj.last_modified,
         })
 
