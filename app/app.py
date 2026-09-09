@@ -1145,16 +1145,25 @@ def entregables_list():
             variante = "entrega"  # normalizar legacy
         if variante_filter and variante != variante_filter:
             continue
+        # 'entrega' y 'estricta' son formatos de entrega: se muestran y
+        # descargan como avales.<jur>.pdf (sin sufijo). Los demas conservan
+        # el sufijo para diferenciarlos.
+        jur_slug = m.group("jur")
+        if variante in ("entrega", "estricta"):
+            display_fname = f"avales.{jur_slug}.pdf"
+        else:
+            display_fname = f"avales.{jur_slug}.{variante}.pdf"
         items.append({
             "fecha": fecha,
             "workspace": workspace,
-            "jurisdiccion_slug": m.group("jur"),
-            "jurisdiccion": m.group("jur").replace("_", " ").title(),
+            "jurisdiccion_slug": jur_slug,
+            "jurisdiccion": jur_slug.replace("_", " ").title(),
             "variante": variante,
+            "display_fname": display_fname,
             "kb": (obj.size or 0) // 1024,
             "object_key": name,
             "url": presigned(name, expires_min=60 * 24),
-            "download_url": presigned_download(name, filename=fname, expires_min=60 * 24),
+            "download_url": presigned_download(name, filename=display_fname, expires_min=60 * 24),
             "last_modified": obj.last_modified,
         })
 
