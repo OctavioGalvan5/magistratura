@@ -7,27 +7,34 @@ Restauración:
 - SQL:  INSERT INTO avales_2026.<tabla> SELECT * FROM avales_2026_backup_<ts>.<tabla>;
 - CSV:  reimportar con pandas/psql \\copy.
 """
-import os
 import csv
 import json
+import argparse
 from datetime import datetime
 from pathlib import Path
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
+from db_config import resolve_db_url, DB_CHOICES
 
 load_dotenv()
-engine = create_engine(os.environ["DB_CONNECTION_STRING"], pool_pre_ping=True)
+
+ap = argparse.ArgumentParser()
+ap.add_argument("--db", default="julia", choices=DB_CHOICES, help="qué DB backupear")
+args = ap.parse_args()
+
+engine = create_engine(resolve_db_url(args.db), pool_pre_ping=True)
 SCHEMA = "avales_2026"
 TABLES = ["personas", "fotos", "fotos_personas"]
 
 ts = datetime.now().strftime("%Y%m%d_%H%M%S")
 BACKUP_SCHEMA = f"{SCHEMA}_backup_{ts}"
-CSV_DIR = Path(__file__).parent / "backups" / ts
+CSV_DIR = Path(__file__).parent / "backups" / f"{args.db}_{ts}"
 CSV_DIR.mkdir(parents=True, exist_ok=True)
 
-print(f"Backup timestamp: {ts}")
-print(f"Schema DB:  {BACKUP_SCHEMA}")
-print(f"CSV local:  {CSV_DIR}")
+print(f"DB:                {args.db}")
+print(f"Backup timestamp:  {ts}")
+print(f"Schema DB:         {BACKUP_SCHEMA}")
+print(f"CSV local:         {CSV_DIR}")
 print("-" * 60)
 
 # 1) Backup a schema clonado

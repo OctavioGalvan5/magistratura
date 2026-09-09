@@ -50,6 +50,8 @@
           <div>
             {% if it.variante == 'entrega' %}
               <span class="badge bg-success">{{ it.variante }}</span>
+            {% elif it.variante == 'estricta' %}
+              <span class="badge bg-warning text-dark">{{ it.variante }}</span>
             {% elif it.variante == 'completo' %}
               <span class="badge bg-primary">{{ it.variante }}</span>
             {% elif it.variante == 'todos' %}
@@ -66,7 +68,7 @@
           </div>
           <div class="d-flex gap-1">
             <a class="btn btn-sm btn-outline-primary" href="{{ it.url }}" target="_blank">Ver</a>
-            <a class="btn btn-sm btn-outline-success" href="{{ it.url }}" download>Descargar</a>
+            <a class="btn btn-sm btn-success" href="{{ it.download_url }}">Descargar</a>
           </div>
         </div>
       {% endfor %}

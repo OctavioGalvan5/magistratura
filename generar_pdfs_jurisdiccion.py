@@ -65,7 +65,7 @@ PAGE_W, PAGE_H = 210, 297  # A4 en mm
 MARGIN = 12
 MAX_IMG_PX = 1600
 
-TIPOS_VALIDOS = ("completo", "todos", "docs", "entrega")
+TIPOS_VALIDOS = ("completo", "todos", "docs", "entrega", "entrega_estricta")
 
 
 # ─── Utils ─────────────────────────────────────────────────────
@@ -148,14 +148,18 @@ def cargar_personas(jur_filter: str | None):
             continue
         has_planilla = any(f["tipo"] == "planilla_aval" for f in fotos)
         has_dni = any(f["tipo"] == "dni" for f in fotos)
+        has_credencial = any(f["tipo"] == "credencial" for f in fotos)
         has_otro = any((f["tipo"] or "").lower() in ("otro", "") for f in fotos)
+        has_docs = any(f["tipo"] != "planilla_aval" for f in fotos)
         jur = p["jurisdiccion"] or "SIN JURISDICCION"
         resultado.setdefault(jur, []).append({
             "persona": dict(p),
             "fotos": [dict(f) for f in fotos],
             "has_planilla": has_planilla,
             "has_dni": has_dni,
+            "has_credencial": has_credencial,
             "has_otro": has_otro,
+            "has_docs": has_docs,
             "completo": has_planilla and has_dni,
         })
     return resultado
@@ -188,16 +192,21 @@ def filtrar_para_tipo(items: list, tipo: str) -> list:
         # una planilla de la jurisdicción. El PDF incluye primero todas las planillas
         # únicas y después solo los DNIs+otros de las personas que aportaron algo.
         return [x for x in items if x["has_planilla"]]
+    if tipo == "entrega_estricta":
+        # Estricta: solo firmantes con planilla + al menos un documento
+        # (dni, credencial u otro). PDF sin captions.
+        return [x for x in items if x["has_planilla"] and x["has_docs"]]
     raise ValueError(f"tipo invalido: {tipo}")
 
 
 # ─── PDF ───────────────────────────────────────────────────────
 
 TITULOS = {
-    "completo":      "AVAL COMPLETO (planilla + DNI)",
-    "todos":         "TODOS (planilla + DNI + otros)",
-    "docs":          "DOCUMENTACION (solo DNI + otros)",
-    "entrega":       "AVAL (planillas + documentacion) - formato de entrega",
+    "completo":         "AVAL COMPLETO (planilla + DNI)",
+    "todos":            "TODOS (planilla + DNI + otros)",
+    "docs":             "DOCUMENTACION (solo DNI + otros)",
+    "entrega":          "AVAL (planillas + documentacion) - formato de entrega",
+    "entrega_estricta": "AVAL ESTRICTO (planilla + documento, sin captions)",
 }
 
 
@@ -217,6 +226,23 @@ def add_image_page(pdf: "FPDF", jpg: bytes, caption: str):
         w_mm = avail_w; h_mm = w_mm / ratio
     x = MARGIN + (avail_w - w_mm) / 2
     y = pdf.get_y() + 1
+    pdf.image(io.BytesIO(jpg), x=x, y=y, w=w_mm, h=h_mm)
+
+
+def add_image_page_full(pdf: "FPDF", jpg: bytes):
+    """Página A4 con imagen escalada al área útil, sin captions."""
+    img = Image.open(io.BytesIO(jpg))
+    iw, ih = img.size
+    pdf.add_page()
+    avail_w = PAGE_W - 2 * MARGIN
+    avail_h = PAGE_H - 2 * MARGIN
+    ratio = iw / ih
+    if avail_w / avail_h > ratio:
+        h_mm = avail_h; w_mm = h_mm * ratio
+    else:
+        w_mm = avail_w; h_mm = w_mm / ratio
+    x = MARGIN + (avail_w - w_mm) / 2
+    y = MARGIN + (avail_h - h_mm) / 2
     pdf.image(io.BytesIO(jpg), x=x, y=y, w=w_mm, h=h_mm)
 
 
@@ -266,9 +292,52 @@ def build_pdf_entrega(_jur: str, items: list) -> bytes:
     return bytes(pdf.output())
 
 
+def build_pdf_entrega_estricta(_jur: str, items: list) -> bytes:
+    """
+    Variante estricta: solo firmantes con planilla + al menos un documento
+    (dni, credencial u otro). Sin captions, imagen a página completa.
+    Estructura:
+      1) TODAS las planillas firmadas (una por página, deduplicadas)
+      2) TODOS los documentos (dni + credencial + otro) por persona
+    """
+    pdf = FPDF(orientation="P", unit="mm", format="A4")
+    pdf.set_auto_page_break(auto=True, margin=MARGIN)
+
+    planillas: dict = {}
+    for it in items:
+        for f in it["fotos"]:
+            if f["tipo"] == "planilla_aval" and f["id"] not in planillas:
+                planillas[f["id"]] = f
+
+    for f in planillas.values():
+        try:
+            raw = download_minio(f["minio_object_key"])
+            jpg = downscale_for_pdf(raw)
+            if jpg:
+                add_image_page_full(pdf, jpg)
+        except Exception as e:
+            print(f"    ! error planilla id={f['id']}: {e}")
+
+    for it in items:
+        for f in it["fotos"]:
+            if f["tipo"] == "planilla_aval":
+                continue
+            try:
+                raw = download_minio(f["minio_object_key"])
+                jpg = downscale_for_pdf(raw)
+                if jpg:
+                    add_image_page_full(pdf, jpg)
+            except Exception as e:
+                print(f"    ! error doc id={f['id']}: {e}")
+
+    return bytes(pdf.output())
+
+
 def build_pdf(jur: str, items: list, tipo: str) -> bytes:
     if tipo == "entrega":
         return build_pdf_entrega(jur, items)
+    if tipo == "entrega_estricta":
+        return build_pdf_entrega_estricta(jur, items)
 
     pdf = FPDF(orientation="P", unit="mm", format="A4")
     pdf.set_auto_page_break(auto=True, margin=MARGIN)
@@ -404,7 +473,12 @@ def main():
             if not subset:
                 print(f"  ({tipo}) 0 personas, se omite")
                 continue
-            fname = f"avales.{s}.pdf" if tipo == "entrega" else f"avales.{s}.{tipo}.pdf"
+            if tipo == "entrega":
+                fname = f"avales.{s}.pdf"
+            elif tipo == "entrega_estricta":
+                fname = f"avales.{s}.estricta.pdf"
+            else:
+                fname = f"avales.{s}.{tipo}.pdf"
             key = f"{prefix}/{fname}"
             if args.dry_run:
                 print(f"  ({tipo}) DRY -> {key}  [{len(subset)} personas]")

@@ -86,6 +86,14 @@ def exec_sql(sql, **params):
 def presigned(object_key, expires_min=60):
     return minio.presigned_get_object(BUCKET, object_key, expires=timedelta(minutes=expires_min))
 
+def presigned_download(object_key, filename=None, expires_min=60):
+    """URL presignada que fuerza descarga (Content-Disposition: attachment)."""
+    filename = filename or object_key.rsplit("/", 1)[-1]
+    return minio.presigned_get_object(
+        BUCKET, object_key, expires=timedelta(minutes=expires_min),
+        response_headers={"response-content-disposition": f'attachment; filename="{filename}"'},
+    )
+
 
 # ─── Workspace switch ───
 
@@ -1124,7 +1132,7 @@ def entregables_list():
         # Nuevo formato "entrega": avales.<jur>.pdf (sin sufijo).
         # Otros: avales.<jur>.<variante>.pdf.  Legacy: avales.<jur>.instructivo.pdf.
         m = re.match(
-            r"^avales\.(?P<jur>.+?)(?:\.(?P<variante>completo|todos|docs|instructivo))?\.pdf$",
+            r"^avales\.(?P<jur>.+?)(?:\.(?P<variante>completo|todos|docs|instructivo|estricta))?\.pdf$",
             fname,
         )
         if not m:
@@ -1142,6 +1150,7 @@ def entregables_list():
             "kb": (obj.size or 0) // 1024,
             "object_key": name,
             "url": presigned(name, expires_min=60 * 24),
+            "download_url": presigned_download(name, filename=fname, expires_min=60 * 24),
             "last_modified": obj.last_modified,
         })
 
