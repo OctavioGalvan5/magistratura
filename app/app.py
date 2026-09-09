@@ -1158,25 +1158,34 @@ def entregables_list():
         fecha = parts[1]
         fname = parts[-1]
         workspace = parts[2] if len(parts) >= 4 else "julia"
-        # Nuevo formato "entrega": avales.<jur>.pdf (sin sufijo).
-        # Otros: avales.<jur>.<variante>.pdf.  Legacy: avales.<jur>.instructivo.pdf.
+        # Formatos soportados:
+        #   avales.<jur>.pdf                 -> variante 'entrega'  (formato oficial)
+        #   avales.<jur>.<variante>.pdf      -> completo/todos/docs/estricta/instructivo(legacy)
+        #   dni_matricula.<jur>.pdf          -> variante 'dni_matricula' (personas con doc sin planilla)
         m = re.match(
             r"^avales\.(?P<jur>.+?)(?:\.(?P<variante>completo|todos|docs|instructivo|estricta))?\.pdf$",
             fname,
         )
-        if not m:
+        m_dni = re.match(r"^dni_matricula\.(?P<jur>.+?)\.pdf$", fname) if not m else None
+        if not m and not m_dni:
             continue
-        variante = m.group("variante") or "entrega"
-        if variante == "instructivo":
-            variante = "entrega"  # normalizar legacy
+        if m_dni:
+            variante = "dni_matricula"
+            jur_slug = m_dni.group("jur")
+        else:
+            variante = m.group("variante") or "entrega"
+            if variante == "instructivo":
+                variante = "entrega"  # normalizar legacy
+            jur_slug = m.group("jur")
         if variante_filter and variante != variante_filter:
             continue
         # 'entrega' y 'estricta' son formatos de entrega: se muestran y
         # descargan como avales.<jur>.pdf (sin sufijo). Los demas conservan
         # el sufijo para diferenciarlos.
-        jur_slug = m.group("jur")
         if variante in ("entrega", "estricta"):
             display_fname = f"avales.{jur_slug}.pdf"
+        elif variante == "dni_matricula":
+            display_fname = f"dni_matricula.{jur_slug}.pdf"
         else:
             display_fname = f"avales.{jur_slug}.{variante}.pdf"
         items.append({

@@ -52,6 +52,8 @@
               <span class="badge bg-success">{{ it.variante }}</span>
             {% elif it.variante == 'estricta' %}
               <span class="badge bg-warning text-dark">{{ it.variante }}</span>
+            {% elif it.variante == 'dni_matricula' %}
+              <span class="badge bg-dark">{{ it.variante }}</span>
             {% elif it.variante == 'completo' %}
               <span class="badge bg-primary">{{ it.variante }}</span>
             {% elif it.variante == 'todos' %}
