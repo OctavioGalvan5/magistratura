@@ -1123,12 +1123,15 @@ def entregables_list():
 
     items = []
     for obj in minio.list_objects(BUCKET, prefix="entregables/", recursive=True):
-        name = obj.object_name  # entregables/YYYYMMDD/avales.<jur>.<variante>.pdf
+        name = obj.object_name
+        # Formatos: entregables/YYYYMMDD/avales.<jur>.<variante>.pdf         (julia)
+        #           entregables/YYYYMMDD/<workspace>/avales.<jur>.<var>.pdf  (nacion u otro)
         parts = name.split("/")
         if len(parts) < 3 or not name.endswith(".pdf"):
             continue
         fecha = parts[1]
-        fname = parts[2]
+        fname = parts[-1]
+        workspace = parts[2] if len(parts) >= 4 else "julia"
         # Nuevo formato "entrega": avales.<jur>.pdf (sin sufijo).
         # Otros: avales.<jur>.<variante>.pdf.  Legacy: avales.<jur>.instructivo.pdf.
         m = re.match(
@@ -1144,6 +1147,7 @@ def entregables_list():
             continue
         items.append({
             "fecha": fecha,
+            "workspace": workspace,
             "jurisdiccion_slug": m.group("jur"),
             "jurisdiccion": m.group("jur").replace("_", " ").title(),
             "variante": variante,
